@@ -14,6 +14,7 @@ import importIcon from "./assets/import.png";
 import logoVd from "./assets/logo_vd.svg";
 import restoreIcon from "./assets/restore.png";
 import searchIcon from "./assets/search.png";
+import settingsIcon from "./assets/settings.png";
 import sidebarIcon from "./assets/sidebar.png";
 
 function useLocalStorage(key, initial) {
@@ -167,6 +168,7 @@ export default function App() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [selectedTeacherView, setSelectedTeacherView] = useState(null);
   const [selectedStudentView, setSelectedStudentView] = useState(null);
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const studentImportRef = useRef(null);
 
   const [isStudentModalOpen, setIsStudentModalOpen] = useState(false);
@@ -1417,7 +1419,7 @@ export default function App() {
 
   return (
     <div className={`${shell} h-dvh min-h-screen overflow-hidden flex flex-col lg:flex-row`} style={{ background: HIGHLIGHT }}>
-      <aside className={`relative w-full ${isSidebarCollapsed ? "lg:w-20" : "lg:w-64"} lg:h-full shrink-0 border-b lg:border-b-0 lg:border-r ${sidebar} p-3 sm:p-4 flex flex-col sticky top-0 z-40 transition-all duration-200`} style={{ background: PRIMARY }}>
+      <aside className={`relative w-full ${isSidebarCollapsed ? "lg:w-20" : "lg:w-64"} lg:h-full shrink-0 overflow-hidden border-b lg:border-b-0 lg:border-r ${sidebar} p-3 sm:p-4 flex flex-col sticky top-0 z-40 transition-all duration-200`} style={{ background: PRIMARY }}>
         <div className="flex-1">
           <div className={`flex items-center justify-center gap-3 mb-3 lg:mb-6 ${isSidebarCollapsed ? "lg:justify-center" : "lg:justify-start"}`}>
             <BrandMark />
@@ -1466,6 +1468,16 @@ export default function App() {
             />
           </button>
         </div>
+        <button
+          type="button"
+          onClick={() => setIsSettingsModalOpen(true)}
+          className={`mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium text-white transition hover:bg-white/10 ${isSidebarCollapsed ? "lg:justify-center" : "lg:justify-start"}`}
+          aria-label="Settings"
+          title="Settings"
+        >
+          <img src={settingsIcon} alt="" className="h-5 w-5" />
+          <span className={isSidebarCollapsed ? "lg:hidden" : ""}>Settings</span>
+        </button>
       </aside>
 
       <main className="flex-1 min-h-0 p-3 sm:p-4 lg:p-6 space-y-4 lg:space-y-6 overflow-auto">
@@ -2443,6 +2455,35 @@ export default function App() {
               <div className="flex flex-col sm:flex-row sm:justify-end gap-2">
                 <button type="button" onClick={() => setIsAssignStudentsModalOpen(false)} className={smallBtn} style={secondaryBtnStyle}>Cancel</button>
                 <button type="button" onClick={saveAssignedStudents} disabled={!assignTeacherId} className={smallBtn} style={assignTeacherId ? primaryBtnStyle : disabledPrimaryBtnStyle}>Save</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isSettingsModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center overflow-y-auto bg-black/40 p-3 sm:p-4" onClick={() => setIsSettingsModalOpen(false)}>
+            <div className="my-4 w-full max-w-md rounded-lg bg-white p-4 sm:p-6 shadow-xl space-y-4" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center gap-3">
+                <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-gray-200">
+                  <img src={settingsIcon} alt="" className="h-5 w-5" />
+                </span>
+                <div>
+                  <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>Settings</h3>
+                  <p className="text-sm text-gray-500">Google sign in will be connected later.</p>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-8">
+                <button type="button" className={`${mainBtn} opacity-60`} style={secondaryBtnStyle} disabled>
+                  Sign in with Google
+                </button>
+                <button type="button" className={`${mainBtn} opacity-60`} style={dangerBtnStyle} disabled>
+                  Sign out
+                </button>
+              </div>
+
+              <div className="flex flex-col sm:flex-row sm:justify-end gap-2">
+                <button type="button" onClick={() => setIsSettingsModalOpen(false)} className={smallBtn} style={secondaryBtnStyle}>Close</button>
               </div>
             </div>
           </div>
