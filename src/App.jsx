@@ -11,6 +11,7 @@ import doneIcon from "./assets/done.png";
 import editIcon from "./assets/edit.png";
 import exportIcon from "./assets/export.png";
 import importIcon from "./assets/import.png";
+import informationIcon from "./assets/information.png";
 import logoVd from "./assets/logo_vd.svg";
 import restoreIcon from "./assets/restore.png";
 import searchIcon from "./assets/search.png";
@@ -159,6 +160,7 @@ export default function App() {
   const [selectedTeacherView, setSelectedTeacherView] = useState(null);
   const [selectedStudentView, setSelectedStudentView] = useState(null);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [isAllIncomeModalOpen, setIsAllIncomeModalOpen] = useState(false);
   const [session, setSession] = useState(null);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [authError, setAuthError] = useState("");
@@ -286,6 +288,7 @@ export default function App() {
     add: addIcon,
     archive: archiveIcon,
     edit: editIcon,
+    information: informationIcon,
   };
 
   const actionIcon = (type) => (
@@ -709,8 +712,6 @@ export default function App() {
     })
       .map(({ row }) => row);
   };
-
-  const rowNumber = (rows, row) => rows.findIndex((item) => item === row) + 1;
 
   const changeSort = (table, key) => {
     setSortConfig((prev) => ({
@@ -1462,6 +1463,42 @@ export default function App() {
       });
   }, [teachers, students, payments, financeMonth, activeFinanceTeacherFilter]);
 
+  const allTimeIncomeOverview = useMemo(() => {
+    const paymentTeacherId = (payment) => {
+      if (payment.teacherId != null) return payment.teacherId;
+      return students.find((student) => sameId(student.id, payment.studentId))?.teacherId ?? null;
+    };
+    const totalIncome = payments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+    const totalAdminShare = payments.reduce(
+      (sum, payment) => sum + Number(payment.amount || 0) * (paymentAdminPercentValue(payment) / 100),
+      0
+    );
+    const totalSchoolShare = payments.reduce(
+      (sum, payment) => sum + Number(payment.amount || 0) * (paymentSchoolPercentValue(payment) / 100),
+      0
+    );
+    const teacherRows = teachers.map((teacher) => {
+      const total = payments
+        .filter((payment) => sameId(paymentTeacherId(payment), teacher.id))
+        .reduce(
+          (sum, payment) => sum + Number(payment.amount || 0) * (paymentTeacherPercentValue(payment, teacher) / 100),
+          0
+        );
+      return {
+        id: teacher.id,
+        name: teacher.name,
+        total,
+      };
+    });
+
+    return {
+      totalIncome,
+      totalAdminShare,
+      totalSchoolShare,
+      teacherRows,
+    };
+  }, [payments, students, teachers]);
+
   const filteredArchiveStudents = archive.students.filter((student) => {
     const q = archiveSearch.trim().toLowerCase();
     return !q || [
@@ -1990,9 +2027,14 @@ export default function App() {
       </aside>
 
       <main className="flex-1 min-h-0 p-3 sm:p-4 lg:p-6 space-y-4 lg:space-y-6 overflow-auto">
-        {(isDataLoading || dataError) && (
-          <div className={`rounded-lg border p-3 text-sm ${dataError ? "border-red-200 bg-red-50 text-red-700" : "border-gray-200 bg-white text-gray-500"}`}>
-            {dataError || "Loading Supabase data..."}
+        {isDataLoading && (
+          <div className="fixed right-4 top-4 z-50 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-500 shadow-sm">
+            Loading Supabase data...
+          </div>
+        )}
+        {dataError && (
+          <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+            {dataError}
           </div>
         )}
         {activeView === "students" && (
@@ -2031,7 +2073,7 @@ export default function App() {
               <table className="min-w-[76rem] w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-200">
-                    <th className={thClass}>{sortButton("students", "nr", "Nr")}</th>
+                    <th className={thClass}>Nr</th>
                     <th className={thClass}>{sortButton("students", "firstName", "Emri")}</th>
                     <th className={thClass}>{sortButton("students", "lastName", "Mbiemri")}</th>
                     <th className={thClass}>{sortButton("students", "age", "Mosha")}</th>
@@ -2046,14 +2088,14 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedStudents.map((student) => {
+                  {sortedStudents.map((student, index) => {
                     const teacher = teachers.find((t) => sameId(t.id, student.teacherId));
                     const isSelected = selectedStudentView === student.id;
                     const isEditing = editingStudentId === student.id;
                     const hasPayment = hasStudentCurrentPayment(student);
                     return (
                       <tr key={student.id} onClick={() => setSelectedStudentView((prev) => (prev === student.id ? null : student.id))} className={`${rowHover} cursor-pointer ${isSelected ? selectedRow : ""}`}>
-                        <td className={tdClass}>{rowNumber(filteredStudentsByGroup, student)}</td>
+                        <td className={tdClass}>{index + 1}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingStudentFirstName} onChange={(e) => setEditingStudentFirstName(e.target.value)} /> : (student.firstName || student.name)}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingStudentLastName} onChange={(e) => setEditingStudentLastName(e.target.value)} /> : (student.lastName || "-")}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingStudentAge} onChange={(e) => setEditingStudentAge(e.target.value)} type="number" min="0" /> : (student.age || "-")}</td>
@@ -2155,7 +2197,7 @@ export default function App() {
               <table className="min-w-[50rem] w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-200">
-                    <th className={thClass}>{sortButton("teachers", "nr", "Nr")}</th>
+                    <th className={thClass}>Nr</th>
                     <th className={thClass}>{sortButton("teachers", "name", "Emri")}</th>
                     <th className={thClass}>{sortButton("teachers", "lastName", "Mbiemri")}</th>
                     <th className={thClass}>Përqindja</th>
@@ -2164,13 +2206,13 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedTeachers.map((teacher) => {
+                  {sortedTeachers.map((teacher, index) => {
                     const isSelected = selectedTeacherView === teacher.id;
                     const isEditing = editingTeacherId === teacher.id;
                     const countStudents = students.filter((student) => sameId(student.teacherId, teacher.id)).length;
                     return (
                       <tr key={teacher.id} onClick={() => setSelectedTeacherView((prev) => (prev === teacher.id ? null : teacher.id))} className={`${rowHover} cursor-pointer ${isSelected ? selectedRow : ""}`}>
-                        <td className={tdClass}>{rowNumber(filteredTeachers, teacher)}</td>
+                        <td className={tdClass}>{index + 1}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingTeacherFirstName} onChange={(e) => setEditingTeacherFirstName(e.target.value)} /> : (teacher.firstName || teacher.name)}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingTeacherLastName} onChange={(e) => setEditingTeacherLastName(e.target.value)} /> : (teacher.lastName || "-")}</td>
                         <td className={tdClass}>{isEditing ? (
@@ -2210,7 +2252,7 @@ export default function App() {
                   <table className="min-w-[36rem] w-full text-sm">
                     <thead>
                       <tr className="border-b border-gray-200">
-                        <th className={thClass}>{sortButton("selectedTeacherStudents", "nr", "Nr")}</th>
+                        <th className={thClass}>Nr</th>
                         <th className={thClass}>{sortButton("selectedTeacherStudents", "name", "Emri")}</th>
                         <th className={thClass}>{sortButton("selectedTeacherStudents", "lastName", "Mbiemri")}</th>
                         <th className={thClass}>{sortButton("selectedTeacherStudents", "course", "Kursi")}</th>
@@ -2218,9 +2260,9 @@ export default function App() {
                     </thead>
                     <tbody>
                       {selectedTeacherStudents.length > 0 ? (
-                        sortedSelectedTeacherStudents.map((student) => (
+                        sortedSelectedTeacherStudents.map((student, index) => (
                           <tr key={student.id} className={rowHover}>
-                            <td className={tdClass}>{rowNumber(selectedTeacherStudents, student)}</td>
+                            <td className={tdClass}>{index + 1}</td>
                             <td className={tdClass}>{student.firstName || student.name}</td>
                             <td className={tdClass}>{student.lastName || "-"}</td>
                             <td className={tdClass}>{student.course || "-"}</td>
@@ -2267,7 +2309,7 @@ export default function App() {
               <table className="min-w-[52rem] w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-200">
-                    <th className={thClass}>{sortButton("payments", "nr", "Nr")}</th>
+                    <th className={thClass}>Nr</th>
                     <th className={thClass}>{sortButton("payments", "studentName", "Nxënësi")}</th>
                     <th className={thClass}>{sortButton("payments", "teacherName", "Mësuesi")}</th>
                     <th className={thClass}>{sortButton("payments", "amount", "Shuma")}</th>
@@ -2277,11 +2319,11 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedPayments.map((payment) => {
+                  {sortedPayments.map((payment, index) => {
                     const isEditing = editingPaymentId === payment.id;
                     return (
                       <tr key={payment.id} className={rowHover}>
-                        <td className={tdClass}>{rowNumber(filteredPayments, payment)}</td>
+                        <td className={tdClass}>{index + 1}</td>
                         <td className={tdClass}>{isEditing ? (
                           <select className={input} value={editingPaymentStudentId} onChange={(e) => setEditingPaymentStudentId(e.target.value)}>
                             <option value="">Zgjedh nxënësin</option>
@@ -2346,7 +2388,7 @@ export default function App() {
               <table className="min-w-[40rem] w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-200">
-                    <th className={thClass}>{sortButton("paga", "nr", "Nr")}</th>
+                    <th className={thClass}>Nr</th>
                     <th className={thClass}>{sortButton("paga", "name", "Mësuesi")}</th>
                     <th className={thClass}>%</th>
                     <th className={thClass}>{sortButton("paga", "studentsCount", "Nxënës")}</th>
@@ -2358,9 +2400,9 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedTeacherEarnings.map((teacher) => (
+                  {sortedTeacherEarnings.map((teacher, index) => (
                     <tr key={teacher.id} className={rowHover}>
-                      <td className={tdClass}>{rowNumber(teacherEarnings, teacher)}</td>
+                      <td className={tdClass}>{index + 1}</td>
                       <td className={tdClass}>{teacher.name}</td>
                       <td className={tdClass}>{teacher.percent}%</td>
                       <td className={tdClass}>{teacher.studentsCount}</td>
@@ -2373,6 +2415,13 @@ export default function App() {
                   ))}
                 </tbody>
               </table>
+            </div>
+
+            <div className="mt-6 flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm">
+              <span className="font-semibold" style={{ color: PRIMARY }}>Administrata</span>
+              <span className="font-bold">
+                {formatCurrency(sortedTeacherEarnings.reduce((sum, teacher) => sum + Number(teacher.adminShare || 0), 0))}
+              </span>
             </div>
           </div>
         )}
@@ -2412,8 +2461,11 @@ export default function App() {
               </div>
             </div>
 
-            <div className="flex justify-end">
-              <button className={mainBtn} style={secondaryBtnStyle} onClick={openExpenseModal}>{actionLabel("add", "Shto shpenzim")}</button>
+            <div className="flex flex-col sm:flex-row justify-end gap-2">
+              <button className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg px-4 py-2 font-medium text-white sm:w-64" style={primaryBtnStyle} onClick={() => setIsAllIncomeModalOpen(true)}>
+                {actionLabel("information", "Shfaq te gjitha te hyrat")}
+              </button>
+              <button className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg px-4 py-2 font-medium text-white sm:w-64" style={secondaryBtnStyle} onClick={openExpenseModal}>{actionLabel("add", "Shto shpenzim")}</button>
             </div>
 
             <div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
@@ -2421,9 +2473,9 @@ export default function App() {
                 <input className={dateInput} type="month" value={expenseMonthFilter} onChange={(e) => setExpenseMonthFilter(e.target.value)} />
                 <button onClick={() => setExpenseMonthFilter("")} className={mainBtn} style={secondaryBtnStyle}>{actionLabel("clear", "Pastro filtrin")}</button>
               </div>
-              <div className="flex gap-2">
-                <button onClick={exportExpensesExcel} className={mainBtn} style={secondaryBtnStyle}>{actionLabel("export", "Excel shpenzimet")}</button>
-                <button onClick={exportExpensesPdf} className={mainBtn} style={primaryBtnStyle}>{actionLabel("export", "PDF shpenzimet")}</button>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <button onClick={exportExpensesExcel} className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg px-4 py-2 font-medium text-white sm:w-64" style={secondaryBtnStyle}>{actionLabel("export", "Excel shpenzimet")}</button>
+                <button onClick={exportExpensesPdf} className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg px-4 py-2 font-medium text-white sm:w-64" style={primaryBtnStyle}>{actionLabel("export", "PDF shpenzimet")}</button>
               </div>
             </div>
 
@@ -2431,7 +2483,7 @@ export default function App() {
               <table className="min-w-[42rem] w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-200">
-                    <th className={thClass}>{sortButton("finance", "nr", "Nr")}</th>
+                    <th className={thClass}>Nr</th>
                     <th className={thClass}>{sortButton("finance", "name", "Produkti")}</th>
                     <th className={thClass}>{sortButton("finance", "date", "Data")}</th>
                     <th className={thClass}>{sortButton("finance", "amount", "Çmimi")}</th>
@@ -2440,11 +2492,11 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedExpenses.map((expense) => {
+                  {sortedExpenses.map((expense, index) => {
                     const isEditing = editingExpenseId === expense.id;
                     return (
                       <tr key={expense.id} className={rowHover}>
-                        <td className={tdClass}>{rowNumber(filteredExpenses, expense)}</td>
+                        <td className={tdClass}>{index + 1}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingExpenseName} onChange={(e) => setEditingExpenseName(e.target.value)} /> : expense.name}</td>
                         <td className={tdClass}>{isEditing ? <input className={dateInput} type="date" value={editingExpenseDate} onChange={(e) => setEditingExpenseDate(e.target.value)} /> : formatDateDisplay(expense.date)}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} type="number" value={editingExpenseAmount} onChange={(e) => setEditingExpenseAmount(e.target.value)} /> : formatCurrency(expense.amount)}</td>
@@ -2496,18 +2548,18 @@ export default function App() {
               <table className="min-w-[36rem] w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-200">
-                    <th className={thClass}>{sortButton("courses", "nr", "Nr")}</th>
+                    <th className={thClass}>Nr</th>
                     <th className={thClass}>{sortButton("courses", "name", "Emri i kursit")}</th>
                     <th className={thClass}>{sortButton("courses", "price", "Çmimi")}</th>
                     <th className={thClass}>Veprime</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedCourses.map((course) => {
+                  {sortedCourses.map((course, index) => {
                     const isEditing = editingCourseId === course.id;
                     return (
                       <tr key={course.id} className={rowHover}>
-                        <td className={tdClass}>{rowNumber(filteredCourses, course)}</td>
+                        <td className={tdClass}>{index + 1}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingCourseName} onChange={(e) => setEditingCourseName(e.target.value)} /> : course.name}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingCoursePrice} onChange={(e) => setEditingCoursePrice(e.target.value)} type="number" min="0" step="0.01" /> : formatCurrency(course.price)}</td>
                         <td className={tdClass}>
@@ -2562,7 +2614,7 @@ export default function App() {
                 <table className="min-w-[40rem] w-full text-sm">
                   <thead>
                     <tr className="border-b border-gray-200">
-                      <th className={thClass}>{sortButton("archive", "nr", "Nr")}</th>
+                      <th className={thClass}>Nr</th>
                       <th className={thClass}>#</th>
                       <th className={thClass}>{sortButton("archive", "name", "Emri")}</th>
                       <th className={thClass}>{sortButton("archive", "teacherName", "Mësuesi")}</th>
@@ -2570,11 +2622,11 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {sortedArchiveStudents.map((student) => {
+                    {sortedArchiveStudents.map((student, index) => {
                       const teacher = teachers.find((t) => sameId(t.id, student.teacherId));
                       return (
                         <tr key={student.id} className={rowHover}>
-                          <td className={tdClass}>{rowNumber(filteredArchiveStudents, student)}</td>
+                          <td className={tdClass}>{index + 1}</td>
                           <td className={tdClass}><input type="checkbox" className={roundCheckbox} checked={archiveSelection.students.includes(student.id)} onChange={() => toggleArchiveSelection("students", student.id)} /></td>
                           <td className={tdClass}>{student.name}</td>
                           <td className={tdClass}>{teacher?.name || "-"}</td>
@@ -2604,7 +2656,7 @@ export default function App() {
                 <table className="min-w-[34rem] w-full text-sm">
                   <thead>
                     <tr className="border-b border-gray-200">
-                      <th className={thClass}>{sortButton("archive", "nr", "Nr")}</th>
+                      <th className={thClass}>Nr</th>
                       <th className={thClass}>#</th>
                       <th className={thClass}>Emri</th>
                       <th className={thClass}>%</th>
@@ -2612,9 +2664,9 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {sortedArchiveTeachers.map((teacher) => (
+                    {sortedArchiveTeachers.map((teacher, index) => (
                       <tr key={teacher.id} className={rowHover}>
-                        <td className={tdClass}>{rowNumber(filteredArchiveTeachers, teacher)}</td>
+                        <td className={tdClass}>{index + 1}</td>
                         <td className={tdClass}><input type="checkbox" className={roundCheckbox} checked={archiveSelection.teachers.includes(teacher.id)} onChange={() => toggleArchiveSelection("teachers", teacher.id)} /></td>
                         <td className={tdClass}>{teacher.name}</td>
                         <td className={tdClass}>{teacher.percent}%</td>
@@ -2643,7 +2695,7 @@ export default function App() {
                 <table className="min-w-[44rem] w-full text-sm">
                   <thead>
                     <tr className="border-b border-gray-200">
-                      <th className={thClass}>{sortButton("archive", "nr", "Nr")}</th>
+                      <th className={thClass}>Nr</th>
                       <th className={thClass}>#</th>
                       <th className={thClass}>Nxënësi</th>
                       <th className={thClass}>Mësuesi</th>
@@ -2653,9 +2705,9 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {sortedArchivePayments.map((payment) => (
+                    {sortedArchivePayments.map((payment, index) => (
                       <tr key={payment.id} className={rowHover}>
-                        <td className={tdClass}>{rowNumber(filteredArchivePayments, payment)}</td>
+                        <td className={tdClass}>{index + 1}</td>
                         <td className={tdClass}><input type="checkbox" className={roundCheckbox} checked={archiveSelection.payments.includes(payment.id)} onChange={() => toggleArchiveSelection("payments", payment.id)} /></td>
                         <td className={tdClass}>{payment.studentName || "Pa student"}</td>
                         <td className={tdClass}>{payment.teacherName || "Pa mësues"}</td>
@@ -2686,7 +2738,7 @@ export default function App() {
                 <table className="min-w-[34rem] w-full text-sm">
                   <thead>
                     <tr className="border-b border-gray-200">
-                      <th className={thClass}>{sortButton("courses", "nr", "Nr")}</th>
+                      <th className={thClass}>Nr</th>
                       <th className={thClass}>#</th>
                       <th className={thClass}>{sortButton("courses", "name", "Emri i kursit")}</th>
                       <th className={thClass}>{sortButton("courses", "price", "Çmimi")}</th>
@@ -2694,9 +2746,9 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {sortedArchiveCourses.map((course) => (
+                    {sortedArchiveCourses.map((course, index) => (
                       <tr key={course.id} className={rowHover}>
-                        <td className={tdClass}>{rowNumber(filteredArchiveCourses, course)}</td>
+                        <td className={tdClass}>{index + 1}</td>
                         <td className={tdClass}><input type="checkbox" className={roundCheckbox} checked={(archiveSelection.courses || []).includes(course.id)} onChange={() => toggleArchiveSelection("courses", course.id)} /></td>
                         <td className={tdClass}>{course.name}</td>
                         <td className={tdClass}>{formatCurrency(course.price)}</td>
@@ -2789,6 +2841,63 @@ export default function App() {
                 <button type="submit" className={smallBtn} style={primaryBtnStyle}>Save</button>
               </div>
             </form>
+          </div>
+        )}
+
+        {isAllIncomeModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center overflow-y-auto bg-black/40 p-3 sm:p-4" onClick={() => setIsAllIncomeModalOpen(false)}>
+            <div className="my-4 w-full max-w-2xl rounded-lg bg-white p-4 sm:p-6 shadow-xl space-y-5" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center gap-3">
+                <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-gray-200">
+                  <img src={informationIcon} alt="" className="h-5 w-5" />
+                </span>
+                <div>
+                  <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>Të gjitha të hyrat</h3>
+                  <p className="text-sm text-gray-500">Përmbledhje prej fillimit të shkollës.</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3">
+                <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
+                  <span className="font-medium">Të gjitha të hyrat e shkollës prej fillimit</span>
+                  <span className="font-bold">{formatCurrency(allTimeIncomeOverview.totalIncome)}</span>
+                </div>
+                <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
+                  <span className="font-medium">Të gjitha të hyrat e administratës prej fillimit</span>
+                  <span className="font-bold">{formatCurrency(allTimeIncomeOverview.totalAdminShare)}</span>
+                </div>
+                <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
+                  <span className="font-medium">Të gjitha të hyrat që i takojnë shkollës</span>
+                  <span className="font-bold">{formatCurrency(allTimeIncomeOverview.totalSchoolShare)}</span>
+                </div>
+              </div>
+
+              <div>
+                <h4 className="mb-3 font-bold" style={{ color: PRIMARY }}>Të gjitha pagat prej fillimit për secilin mësues</h4>
+                <div className={tableWrap}>
+                  <table className="min-w-[28rem] w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-200">
+                        <th className={thClass}>Mësuesi</th>
+                        <th className={thClass}>Paga</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {allTimeIncomeOverview.teacherRows.map((teacher) => (
+                        <tr key={`all-time-${teacher.id}`} className={rowHover}>
+                          <td className={tdClass}>{teacher.name}</td>
+                          <td className={tdClass}>{formatCurrency(teacher.total)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row sm:justify-end gap-2">
+                <button type="button" onClick={() => setIsAllIncomeModalOpen(false)} className={smallBtn} style={secondaryBtnStyle}>Close</button>
+              </div>
+            </div>
           </div>
         )}
 
