@@ -16,23 +16,7 @@ import restoreIcon from "./assets/restore.png";
 import searchIcon from "./assets/search.png";
 import settingsIcon from "./assets/settings.png";
 import sidebarIcon from "./assets/sidebar.png";
-
-function useLocalStorage(key, initial) {
-  const [value, setValue] = useState(() => {
-    try {
-      const saved = localStorage.getItem(key);
-      return saved ? JSON.parse(saved) : initial;
-    } catch {
-      return initial;
-    }
-  });
-
-  useEffect(() => {
-    localStorage.setItem(key, JSON.stringify(value));
-  }, [key, value]);
-
-  return [value, setValue];
-}
+import { isSupabaseConfigured, supabase } from "./supabase";
 
 function formatCurrency(value) {
   return `€${Number(value || 0).toFixed(2)}`;
@@ -145,6 +129,10 @@ function getExcelValue(row, keys) {
   return match ? String(match[1] || "").trim() : "";
 }
 
+function sameId(a, b) {
+  return String(a ?? "") === String(b ?? "");
+}
+
 export default function App() {
   const PRIMARY = "#2e2c80";
   const SECONDARY = "#54807f";
@@ -152,23 +140,28 @@ export default function App() {
   const WARNING = "#d4a017";
   const DANGER = "#c0392b";
 
-  const [students, setStudents] = useLocalStorage("students", []);
-  const [teachers, setTeachers] = useLocalStorage("teachers", []);
-  const [payments, setPayments] = useLocalStorage("payments", []);
-  const [courses, setCourses] = useLocalStorage("courses", []);
-  const [archive, setArchive] = useLocalStorage("archive", {
+  const [students, setStudents] = useState([]);
+  const [teachers, setTeachers] = useState([]);
+  const [payments, setPayments] = useState([]);
+  const [courses, setCourses] = useState([]);
+  const [archive, setArchive] = useState({
     students: [],
     teachers: [],
     payments: [],
     courses: [],
   });
-  const [expenses, setExpenses] = useLocalStorage("expenses", []);
+  const [expenses, setExpenses] = useState([]);
+  const [isDataLoading, setIsDataLoading] = useState(false);
+  const [dataError, setDataError] = useState("");
 
   const [activeView, setActiveView] = useState("students");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [selectedTeacherView, setSelectedTeacherView] = useState(null);
   const [selectedStudentView, setSelectedStudentView] = useState(null);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [session, setSession] = useState(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState("");
   const studentImportRef = useRef(null);
 
   const [isStudentModalOpen, setIsStudentModalOpen] = useState(false);
@@ -281,6 +274,7 @@ export default function App() {
   const activeNavStyle = { background: HIGHLIGHT, color: "white" };
   const inactiveNavStyle = { color: "white" };
   const disabledPrimaryBtnStyle = { background: SECONDARY, color: "white", cursor: "not-allowed", opacity: 0.55 };
+  const currentUser = session?.user;
   const icons = {
     search: searchIcon,
     clear: clearIcon,
@@ -323,6 +317,373 @@ export default function App() {
       />
     </div>
   );
+
+  const normalizeStudent = (row) => ({
+    id: row.id,
+    name: row.name || [row.first_name, row.last_name].filter(Boolean).join(" "),
+    firstName: row.first_name || "",
+    lastName: row.last_name || "",
+    age: row.age == null ? "" : String(row.age),
+    city: row.city || "",
+    phone: row.phone || "",
+    email: row.email || "",
+    course: row.course || "",
+    group: row.group || "",
+    teacherId: row.teacher_id,
+    archivedAt: row.archived_at,
+  });
+
+  const normalizeTeacher = (row) => ({
+    id: row.id,
+    name: row.name || [row.first_name, row.last_name].filter(Boolean).join(" "),
+    firstName: row.first_name || "",
+    lastName: row.last_name || "",
+    percent: Number(row.percent ?? 80),
+    archivedAt: row.archived_at,
+  });
+
+  const normalizeCourse = (row) => ({
+    id: row.id,
+    name: row.name || "",
+    price: Number(row.price || 0),
+    archivedAt: row.archived_at,
+  });
+
+  const normalizePayment = (row) => ({
+    id: row.id,
+    studentId: row.student_id,
+    studentName: row.student_name || "",
+    teacherId: row.teacher_id,
+    teacherName: row.teacher_name || "",
+    amount: Number(row.amount || 0),
+    teacherPercent: Number(row.teacher_percent ?? 80),
+    adminPercent: Number(row.admin_percent ?? 15),
+    schoolPercent: Number(row.school_percent ?? 5),
+    note: row.note || "",
+    date: row.date,
+    archivedAt: row.archived_at,
+  });
+
+  const normalizeExpense = (row) => ({
+    id: row.id,
+    name: row.name || "",
+    date: row.date,
+    amount: Number(row.amount || 0),
+    note: row.note || "",
+    archivedAt: row.archived_at,
+  });
+
+  const studentToRow = (student) => ({
+    name: student.name,
+    first_name: student.firstName,
+    last_name: student.lastName,
+    age: student.age || null,
+    city: student.city,
+    phone: student.phone,
+    email: student.email,
+    course: student.course,
+    group: student.group || null,
+    teacher_id: student.teacherId ?? null,
+  });
+
+  const teacherToRow = (teacher) => ({
+    name: teacher.name,
+    first_name: teacher.firstName,
+    last_name: teacher.lastName,
+    percent: Number(teacher.percent),
+  });
+
+  const courseToRow = (course) => ({
+    name: course.name,
+    price: Number(course.price || 0),
+  });
+
+  const paymentToRow = (payment) => ({
+    student_id: payment.studentId ?? null,
+    student_name: payment.studentName,
+    teacher_id: payment.teacherId ?? null,
+    teacher_name: payment.teacherName,
+    amount: Number(payment.amount || 0),
+    teacher_percent: Number(payment.teacherPercent ?? 80),
+    admin_percent: Number(payment.adminPercent ?? 15),
+    school_percent: Number(payment.schoolPercent ?? 5),
+    note: payment.note || "",
+    date: payment.date,
+  });
+
+  const expenseToRow = (expense) => ({
+    name: expense.name,
+    date: expense.date,
+    amount: Number(expense.amount || 0),
+    note: expense.note || "",
+  });
+
+  const splitArchived = (rows, normalize) => {
+    const normalizedRows = rows.map(normalize);
+    return {
+      active: normalizedRows.filter((row) => !row.archivedAt),
+      archived: normalizedRows.filter((row) => row.archivedAt),
+    };
+  };
+
+  const rowsAreEqual = (firstRow, secondRow) => JSON.stringify(firstRow) === JSON.stringify(secondRow);
+
+  const upsertById = (rows, nextRow) => {
+    const existingRow = rows.find((row) => sameId(row.id, nextRow.id));
+    if (!existingRow) return [...rows, nextRow];
+    if (rowsAreEqual(existingRow, nextRow)) return rows;
+    return rows.map((row) => (sameId(row.id, nextRow.id) ? nextRow : row));
+  };
+
+  const removeById = (rows, id) => {
+    if (!rows.some((row) => sameId(row.id, id))) return rows;
+    return rows.filter((row) => !sameId(row.id, id));
+  };
+
+  const loadSupabaseData = async ({ showLoading = true } = {}) => {
+    if (!supabase) return;
+
+    if (showLoading) setIsDataLoading(true);
+    setDataError("");
+
+    const [studentsResult, teachersResult, coursesResult, paymentsResult, expensesResult] = await Promise.all([
+      supabase.from("students").select("*"),
+      supabase.from("teachers").select("*"),
+      supabase.from("courses").select("*"),
+      supabase.from("payments").select("*"),
+      supabase.from("expenses").select("*"),
+    ]);
+
+    const firstError = [studentsResult, teachersResult, coursesResult, paymentsResult, expensesResult].find((result) => result.error)?.error;
+    if (firstError) {
+      setDataError(firstError.message);
+      if (showLoading) setIsDataLoading(false);
+      return;
+    }
+
+    const nextStudents = splitArchived(studentsResult.data || [], normalizeStudent);
+    const nextTeachers = splitArchived(teachersResult.data || [], normalizeTeacher);
+    const nextCourses = splitArchived(coursesResult.data || [], normalizeCourse);
+    const nextPayments = splitArchived(paymentsResult.data || [], normalizePayment);
+
+    setStudents(nextStudents.active);
+    setTeachers(nextTeachers.active);
+    setCourses(nextCourses.active);
+    setPayments(nextPayments.active);
+    setExpenses((expensesResult.data || []).map(normalizeExpense));
+    setArchive({
+      students: nextStudents.archived,
+      teachers: nextTeachers.archived,
+      courses: nextCourses.archived,
+      payments: nextPayments.archived,
+    });
+    if (showLoading) setIsDataLoading(false);
+  };
+
+  const insertRow = async (table, values, normalize) => {
+    const { data, error } = await supabase.from(table).insert(values).select().single();
+    if (error) throw error;
+    return normalize(data);
+  };
+
+  const updateRow = async (table, id, values, normalize) => {
+    const { data, error, count } = await supabase.from(table).update(values, { count: "exact" }).eq("id", id).select().maybeSingle();
+    if (error) throw error;
+    if (count === 0) {
+      throw new Error(`No ${table} row was updated. Check the row id and Supabase RLS update/select policies.`);
+    }
+    return data ? normalize(data) : null;
+  };
+
+  const archiveRow = async (table, id) => {
+    const { error } = await supabase.from(table).update({ archived_at: new Date().toISOString() }).eq("id", id);
+    if (error) throw error;
+  };
+
+  const restoreRow = async (table, id) => {
+    const { error } = await supabase.from(table).update({ archived_at: null }).eq("id", id);
+    if (error) throw error;
+  };
+
+  const deleteRow = async (table, id) => {
+    const { error } = await supabase.from(table).delete().eq("id", id);
+    if (error) throw error;
+  };
+
+  const reportDataError = (error) => {
+    const message = error?.message || "Supabase action failed.";
+    setDataError(message);
+    window.alert(message);
+  };
+
+  useEffect(() => {
+    if (!supabase) {
+      setIsAuthLoading(false);
+      return undefined;
+    }
+
+    let isMounted = true;
+
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (!isMounted) return;
+      if (error) setAuthError(error.message);
+      setSession(data.session);
+      setIsAuthLoading(false);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      setIsAuthLoading(false);
+      setAuthError("");
+    });
+
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (session) {
+      loadSupabaseData();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session]);
+
+  useEffect(() => {
+    if (!session || !supabase) return undefined;
+
+    let reloadTimer = null;
+    let isReloading = false;
+    const scheduleReload = () => {
+      window.clearTimeout(reloadTimer);
+      reloadTimer = window.setTimeout(() => {
+        if (isReloading) return;
+        isReloading = true;
+        Promise.resolve(loadSupabaseData({ showLoading: false })).finally(() => {
+          isReloading = false;
+        });
+      }, 300);
+    };
+    const reloadIfVisible = () => {
+      if (document.visibilityState === "visible") scheduleReload();
+    };
+    const isIosDevice =
+      /iPad|iPhone|iPod/.test(window.navigator.userAgent) ||
+      (window.navigator.platform === "MacIntel" && window.navigator.maxTouchPoints > 1);
+    const isStandaloneApp =
+      window.matchMedia("(display-mode: standalone)").matches ||
+      window.navigator.standalone === true;
+    const needsResumeReload = isIosDevice && isStandaloneApp;
+    const syncRealtimeRow = (table, payload) => {
+      const row = payload.new || payload.old;
+      if (!row?.id) {
+        scheduleReload();
+        return;
+      }
+
+      const eventType = payload.eventType;
+      const isDelete = eventType === "DELETE";
+      const id = row.id;
+      const syncActiveAndArchive = (setActive, archiveKey, normalize) => {
+        if (isDelete) {
+          setActive((prev) => removeById(prev, id));
+          setArchive((prev) => ({ ...prev, [archiveKey]: removeById(prev[archiveKey] || [], id) }));
+          return;
+        }
+
+        const normalizedRow = normalize(payload.new);
+        if (normalizedRow.archivedAt) {
+          setActive((prev) => removeById(prev, normalizedRow.id));
+          setArchive((prev) => ({
+            ...prev,
+            [archiveKey]: upsertById(prev[archiveKey] || [], normalizedRow),
+          }));
+          return;
+        }
+
+        setActive((prev) => upsertById(prev, normalizedRow));
+        setArchive((prev) => ({ ...prev, [archiveKey]: removeById(prev[archiveKey] || [], normalizedRow.id) }));
+      };
+
+      if (table === "students") syncActiveAndArchive(setStudents, "students", normalizeStudent);
+      if (table === "teachers") syncActiveAndArchive(setTeachers, "teachers", normalizeTeacher);
+      if (table === "courses") syncActiveAndArchive(setCourses, "courses", normalizeCourse);
+      if (table === "payments") syncActiveAndArchive(setPayments, "payments", normalizePayment);
+      if (table === "expenses") {
+        if (isDelete || payload.new?.archived_at) {
+          setExpenses((prev) => removeById(prev, id));
+          return;
+        }
+        setExpenses((prev) => upsertById(prev, normalizeExpense(payload.new)));
+      }
+    };
+
+    const channel = supabase.channel("app-data-realtime");
+    ["students", "teachers", "courses", "payments", "expenses"].forEach((table) => {
+      channel.on(
+        "postgres_changes",
+        { event: "*", schema: "public", table },
+        (payload) => syncRealtimeRow(table, payload)
+      );
+    });
+    channel.subscribe();
+    if (needsResumeReload) {
+      window.addEventListener("pageshow", reloadIfVisible);
+      window.addEventListener("online", reloadIfVisible);
+      document.addEventListener("visibilitychange", reloadIfVisible);
+    }
+
+    return () => {
+      window.clearTimeout(reloadTimer);
+      if (needsResumeReload) {
+        window.removeEventListener("pageshow", reloadIfVisible);
+        window.removeEventListener("online", reloadIfVisible);
+        document.removeEventListener("visibilitychange", reloadIfVisible);
+      }
+      supabase.removeChannel(channel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session]);
+
+  const signInWithGoogle = async () => {
+    setAuthError("");
+    if (!supabase) {
+      setAuthError("Supabase is not configured yet.");
+      return;
+    }
+
+    const redirectTo = import.meta.env.VITE_SUPABASE_REDIRECT_URL || window.location.origin;
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo,
+        queryParams: {
+          prompt: "select_account",
+        },
+      },
+    });
+
+    if (error) setAuthError(error.message);
+  };
+
+  const signOut = async () => {
+    setAuthError("");
+    if (!supabase) {
+      setAuthError("Supabase is not configured yet.");
+      return;
+    }
+
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      setAuthError(error.message);
+      return;
+    }
+
+    setIsSettingsModalOpen(false);
+  };
 
   const sortRows = (rows, table, getters) => {
     const config = sortConfig[table];
@@ -372,13 +733,13 @@ export default function App() {
     setPayments((prev) => {
       let changed = false;
       const next = prev.map((payment) => {
-        const student = students.find((s) => Number(s.id) === Number(payment.studentId));
+        const student = students.find((s) => sameId(s.id, payment.studentId));
         const fallbackTeacherId = payment.teacherId != null ? payment.teacherId : student?.teacherId != null ? student.teacherId : null;
-        const teacher = teachers.find((t) => Number(t.id) === Number(fallbackTeacherId));
+        const teacher = teachers.find((t) => sameId(t.id, fallbackTeacherId));
         const patched = {
           ...payment,
           studentName: payment.studentName || student?.name || "Pa student",
-          teacherId: payment.teacherId != null ? payment.teacherId : student?.teacherId != null ? Number(student.teacherId) : null,
+          teacherId: payment.teacherId != null ? payment.teacherId : student?.teacherId != null ? student.teacherId : null,
           teacherName: payment.teacherName || teacher?.name || "Pa mësues",
         };
         if (
@@ -396,13 +757,13 @@ export default function App() {
     setArchive((prev) => {
       let changed = false;
       const nextPayments = prev.payments.map((payment) => {
-        const student = students.find((s) => Number(s.id) === Number(payment.studentId));
+        const student = students.find((s) => sameId(s.id, payment.studentId));
         const fallbackTeacherId = payment.teacherId != null ? payment.teacherId : student?.teacherId != null ? student.teacherId : null;
-        const teacher = teachers.find((t) => Number(t.id) === Number(fallbackTeacherId));
+        const teacher = teachers.find((t) => sameId(t.id, fallbackTeacherId));
         const patched = {
           ...payment,
           studentName: payment.studentName || student?.name || "Pa student",
-          teacherId: payment.teacherId != null ? payment.teacherId : student?.teacherId != null ? Number(student.teacherId) : null,
+          teacherId: payment.teacherId != null ? payment.teacherId : student?.teacherId != null ? student.teacherId : null,
           teacherName: payment.teacherName || teacher?.name || "Pa mësues",
         };
         if (
@@ -418,29 +779,32 @@ export default function App() {
     });
   }, [students, teachers, setPayments, setArchive]);
 
-  const addStudent = () => {
+  const addStudent = async () => {
     const firstName = studentForm.firstName.trim();
     const lastName = studentForm.lastName.trim();
     if (!firstName || !lastName || !studentForm.course) return;
 
-    setStudents((prev) => [
-      ...prev,
-      {
-        id: Date.now(),
-        name: `${firstName} ${lastName}`,
-        firstName,
-        lastName,
-        age: studentForm.age.trim(),
-        city: studentForm.city.trim(),
-        phone: studentForm.phone.trim(),
-        email: studentForm.email.trim(),
-        course: studentForm.course,
-        group: studentForm.group,
-        teacherId: studentForm.teacherId ? Number(studentForm.teacherId) : null,
-      },
-    ]);
-    setStudentForm(emptyStudentForm);
-    setIsStudentModalOpen(false);
+    const nextStudent = {
+      name: `${firstName} ${lastName}`,
+      firstName,
+      lastName,
+      age: studentForm.age.trim(),
+      city: studentForm.city.trim(),
+      phone: studentForm.phone.trim(),
+      email: studentForm.email.trim(),
+      course: studentForm.course,
+      group: studentForm.group,
+      teacherId: studentForm.teacherId || null,
+    };
+
+    try {
+      const savedStudent = await insertRow("students", studentToRow(nextStudent), normalizeStudent);
+      setStudents((prev) => [...prev, savedStudent]);
+      setStudentForm(emptyStudentForm);
+      setIsStudentModalOpen(false);
+    } catch (error) {
+      reportDataError(error);
+    }
   };
 
   const importStudentsFromExcel = async (event) => {
@@ -477,7 +841,7 @@ export default function App() {
             email: getExcelValue(row, ["Emaili", "Email", "E-mail"]),
             course: getExcelValue(row, ["Kursi", "Course"]),
             group: getExcelValue(row, ["Grupi", "Group"]),
-            teacherId: teacher ? Number(teacher.id) : null,
+            teacherId: teacher ? teacher.id : null,
           };
         })
         .filter(Boolean);
@@ -487,45 +851,51 @@ export default function App() {
         return;
       }
 
-      setStudents((prev) => [...prev, ...importedStudents]);
+      const { data, error } = await supabase.from("students").insert(importedStudents.map(studentToRow)).select();
+      if (error) throw error;
+      setStudents((prev) => [...prev, ...(data || []).map(normalizeStudent)]);
       window.alert(`U importuan ${importedStudents.length} nxenes.`);
-    } catch {
-      window.alert("Importi deshtoi. Kontrollo formatin e Excel file.");
+    } catch (error) {
+      reportDataError(error);
     } finally {
       event.target.value = "";
     }
   };
 
-  const addTeacher = () => {
+  const addTeacher = async () => {
     const firstName = teacherForm.firstName.trim();
     const lastName = teacherForm.lastName.trim();
     if (!firstName || !lastName) return;
-    setTeachers((prev) => [
-      ...prev,
-      {
-        id: Date.now(),
-        name: `${firstName} ${lastName}`,
-        firstName,
-        lastName,
-        percent: Number(teacherForm.percent),
-      },
-    ]);
-    setTeacherForm(emptyTeacherForm);
-    setIsTeacherModalOpen(false);
+    const nextTeacher = {
+      name: `${firstName} ${lastName}`,
+      firstName,
+      lastName,
+      percent: Number(teacherForm.percent),
+    };
+    try {
+      const savedTeacher = await insertRow("teachers", teacherToRow(nextTeacher), normalizeTeacher);
+      setTeachers((prev) => [...prev, savedTeacher]);
+      setTeacherForm(emptyTeacherForm);
+      setIsTeacherModalOpen(false);
+    } catch (error) {
+      reportDataError(error);
+    }
   };
 
-  const addCourse = () => {
+  const addCourse = async () => {
     if (!courseForm.name.trim() || !courseForm.price) return;
-    setCourses((prev) => [
-      ...prev,
-      {
-        id: Date.now(),
-        name: courseForm.name.trim(),
-        price: parseFloat(courseForm.price),
-      },
-    ]);
-    setCourseForm(emptyCourseForm);
-    setIsCourseModalOpen(false);
+    const nextCourse = {
+      name: courseForm.name.trim(),
+      price: parseFloat(courseForm.price),
+    };
+    try {
+      const savedCourse = await insertRow("courses", courseToRow(nextCourse), normalizeCourse);
+      setCourses((prev) => [...prev, savedCourse]);
+      setCourseForm(emptyCourseForm);
+      setIsCourseModalOpen(false);
+    } catch (error) {
+      reportDataError(error);
+    }
   };
 
   const startEditCourse = (course) => {
@@ -534,22 +904,21 @@ export default function App() {
     setEditingCoursePrice(String(course.price));
   };
 
-  const saveEditCourse = () => {
+  const saveEditCourse = async () => {
     if (!editingCourseName.trim() || !editingCoursePrice) return;
-    setCourses((prev) =>
-      prev.map((course) =>
-        course.id === editingCourseId
-          ? {
-              ...course,
-              name: editingCourseName.trim(),
-              price: parseFloat(editingCoursePrice),
-            }
-          : course
-      )
-    );
-    setEditingCourseId(null);
-    setEditingCourseName("");
-    setEditingCoursePrice("");
+    const nextCourse = {
+      name: editingCourseName.trim(),
+      price: parseFloat(editingCoursePrice),
+    };
+    try {
+      const savedCourse = await updateRow("courses", editingCourseId, courseToRow(nextCourse), normalizeCourse);
+      setCourses((prev) => prev.map((course) => (course.id === editingCourseId ? savedCourse || { ...course, ...nextCourse } : course)));
+      setEditingCourseId(null);
+      setEditingCourseName("");
+      setEditingCoursePrice("");
+    } catch (error) {
+      reportDataError(error);
+    }
   };
 
   const openPaymentModal = () => {
@@ -565,22 +934,20 @@ export default function App() {
 
   const changePaymentStudent = (studentId) => {
     setSelectedStudent(studentId);
-    const student = students.find((s) => Number(s.id) === Number(studentId));
+    const student = students.find((s) => sameId(s.id, studentId));
     const price = student ? getStudentCoursePrice(student) : 0;
     setPaymentAmount(price ? formatExportCurrency(price) : "");
   };
 
-  const addPayment = () => {
+  const addPayment = async () => {
     if (!paymentAmount || !selectedStudent) return;
-    const student = students.find((s) => Number(s.id) === Number(selectedStudent));
-    const teacher = teachers.find((t) => Number(t.id) === Number(student?.teacherId));
-    setPayments((prev) => [
-      ...prev,
+    const student = students.find((s) => sameId(s.id, selectedStudent));
+    const teacher = teachers.find((t) => sameId(t.id, student?.teacherId));
+    const nextPayment = 
       {
-        id: Date.now(),
-        studentId: Number(selectedStudent),
+        studentId: selectedStudent,
         studentName: student?.name || "Pa student",
-        teacherId: student?.teacherId != null ? Number(student.teacherId) : null,
+        teacherId: student?.teacherId ?? null,
         teacherName: teacher?.name || "Pa mësues",
         amount: parseMoney(paymentAmount),
         teacherPercent: Number(paymentTeacherPercent),
@@ -588,16 +955,21 @@ export default function App() {
         schoolPercent: Number(paymentSchoolPercent),
         note: paymentNote.trim(),
         date: paymentDate ? `${paymentDate}T00:00:00.000Z` : new Date().toISOString(),
-      },
-    ]);
-    setPaymentAmount("");
-    setPaymentNote("");
-    setSelectedStudent("");
-    setPaymentDate(currentDateInput());
-    setPaymentTeacherPercent(80);
-    setPaymentAdminPercent(15);
-    setPaymentSchoolPercent(5);
-    setIsPaymentModalOpen(false);
+      };
+    try {
+      const savedPayment = await insertRow("payments", paymentToRow(nextPayment), normalizePayment);
+      setPayments((prev) => [...prev, savedPayment]);
+      setPaymentAmount("");
+      setPaymentNote("");
+      setSelectedStudent("");
+      setPaymentDate(currentDateInput());
+      setPaymentTeacherPercent(80);
+      setPaymentAdminPercent(15);
+      setPaymentSchoolPercent(5);
+      setIsPaymentModalOpen(false);
+    } catch (error) {
+      reportDataError(error);
+    }
   };
 
   const openExpenseModal = () => {
@@ -608,23 +980,25 @@ export default function App() {
     setIsExpenseModalOpen(true);
   };
 
-  const addExpense = () => {
+  const addExpense = async () => {
     if (!expenseName.trim() || !expenseAmount) return;
-    setExpenses((prev) => [
-      ...prev,
-      {
-        id: Date.now(),
-        name: expenseName.trim(),
-        date: expenseDate || new Date().toISOString(),
-        amount: parseFloat(expenseAmount),
-        note: expenseNote.trim(),
-      },
-    ]);
-    setExpenseName("");
-    setExpenseDate(currentDateInput());
-    setExpenseAmount("");
-    setExpenseNote("");
-    setIsExpenseModalOpen(false);
+    const nextExpense = {
+      name: expenseName.trim(),
+      date: expenseDate || new Date().toISOString(),
+      amount: parseFloat(expenseAmount),
+      note: expenseNote.trim(),
+    };
+    try {
+      const savedExpense = await insertRow("expenses", expenseToRow(nextExpense), normalizeExpense);
+      setExpenses((prev) => [...prev, savedExpense]);
+      setExpenseName("");
+      setExpenseDate(currentDateInput());
+      setExpenseAmount("");
+      setExpenseNote("");
+      setIsExpenseModalOpen(false);
+    } catch (error) {
+      reportDataError(error);
+    }
   };
 
   const startEditExpense = (expense) => {
@@ -635,66 +1009,106 @@ export default function App() {
     setExpenseNote(expense.note || "");
   };
 
-  const saveEditExpense = () => {
+  const saveEditExpense = async () => {
     if (!editingExpenseName.trim() || !editingExpenseAmount) return;
-    setExpenses((prev) =>
-      prev.map((expense) =>
-        expense.id === editingExpenseId
-          ? {
-              ...expense,
-              name: editingExpenseName.trim(),
-              date: editingExpenseDate || expense.date,
-              amount: parseFloat(editingExpenseAmount),
-              note: expenseNote.trim(),
-            }
-          : expense
-      )
-    );
-    setEditingExpenseId(null);
-    setEditingExpenseName("");
-    setEditingExpenseDate("");
-    setEditingExpenseAmount("");
-    setExpenseNote("");
+    const existingExpense = expenses.find((expense) => expense.id === editingExpenseId);
+    const nextExpense = {
+      name: editingExpenseName.trim(),
+      date: editingExpenseDate || existingExpense?.date,
+      amount: parseFloat(editingExpenseAmount),
+      note: expenseNote.trim(),
+    };
+    try {
+      const savedExpense = await updateRow("expenses", editingExpenseId, expenseToRow(nextExpense), normalizeExpense);
+      setExpenses((prev) => prev.map((expense) => (expense.id === editingExpenseId ? savedExpense || { ...expense, ...nextExpense } : expense)));
+      setEditingExpenseId(null);
+      setEditingExpenseName("");
+      setEditingExpenseDate("");
+      setEditingExpenseAmount("");
+      setExpenseNote("");
+    } catch (error) {
+      reportDataError(error);
+    }
   };
 
-  const archiveStudent = (student) => {
-    setArchive((prev) => ({ ...prev, students: [...prev.students, student] }));
-    setStudents((prev) => prev.filter((s) => s.id !== student.id));
+  const archiveStudent = async (student) => {
+    try {
+      await archiveRow("students", student.id);
+      setArchive((prev) => ({ ...prev, students: [...prev.students, { ...student, archivedAt: new Date().toISOString() }] }));
+      setStudents((prev) => prev.filter((s) => s.id !== student.id));
+    } catch (error) {
+      reportDataError(error);
+    }
   };
 
-  const archiveTeacher = (teacher) => {
-    setArchive((prev) => ({ ...prev, teachers: [...prev.teachers, teacher] }));
-    setTeachers((prev) => prev.filter((t) => t.id !== teacher.id));
+  const archiveTeacher = async (teacher) => {
+    try {
+      await archiveRow("teachers", teacher.id);
+      setArchive((prev) => ({ ...prev, teachers: [...prev.teachers, { ...teacher, archivedAt: new Date().toISOString() }] }));
+      setTeachers((prev) => prev.filter((t) => t.id !== teacher.id));
+    } catch (error) {
+      reportDataError(error);
+    }
   };
 
-  const archivePayment = (payment) => {
-    setArchive((prev) => ({ ...prev, payments: [...prev.payments, payment] }));
-    setPayments((prev) => prev.filter((p) => p.id !== payment.id));
+  const archivePayment = async (payment) => {
+    try {
+      await archiveRow("payments", payment.id);
+      setArchive((prev) => ({ ...prev, payments: [...prev.payments, { ...payment, archivedAt: new Date().toISOString() }] }));
+      setPayments((prev) => prev.filter((p) => p.id !== payment.id));
+    } catch (error) {
+      reportDataError(error);
+    }
   };
 
-  const archiveCourse = (course) => {
-    setArchive((prev) => ({ ...prev, courses: [...(prev.courses || []), course] }));
-    setCourses((prev) => prev.filter((item) => item.id !== course.id));
+  const archiveCourse = async (course) => {
+    try {
+      await archiveRow("courses", course.id);
+      setArchive((prev) => ({ ...prev, courses: [...(prev.courses || []), { ...course, archivedAt: new Date().toISOString() }] }));
+      setCourses((prev) => prev.filter((item) => item.id !== course.id));
+    } catch (error) {
+      reportDataError(error);
+    }
   };
 
-  const restoreStudent = (student) => {
-    setStudents((prev) => [...prev, student]);
-    setArchive((prev) => ({ ...prev, students: prev.students.filter((x) => x.id !== student.id) }));
+  const restoreStudent = async (student) => {
+    try {
+      await restoreRow("students", student.id);
+      setStudents((prev) => [...prev, { ...student, archivedAt: null }]);
+      setArchive((prev) => ({ ...prev, students: prev.students.filter((x) => x.id !== student.id) }));
+    } catch (error) {
+      reportDataError(error);
+    }
   };
 
-  const restoreTeacher = (teacher) => {
-    setTeachers((prev) => [...prev, teacher]);
-    setArchive((prev) => ({ ...prev, teachers: prev.teachers.filter((x) => x.id !== teacher.id) }));
+  const restoreTeacher = async (teacher) => {
+    try {
+      await restoreRow("teachers", teacher.id);
+      setTeachers((prev) => [...prev, { ...teacher, archivedAt: null }]);
+      setArchive((prev) => ({ ...prev, teachers: prev.teachers.filter((x) => x.id !== teacher.id) }));
+    } catch (error) {
+      reportDataError(error);
+    }
   };
 
-  const restorePayment = (payment) => {
-    setPayments((prev) => [...prev, payment]);
-    setArchive((prev) => ({ ...prev, payments: prev.payments.filter((x) => x.id !== payment.id) }));
+  const restorePayment = async (payment) => {
+    try {
+      await restoreRow("payments", payment.id);
+      setPayments((prev) => [...prev, { ...payment, archivedAt: null }]);
+      setArchive((prev) => ({ ...prev, payments: prev.payments.filter((x) => x.id !== payment.id) }));
+    } catch (error) {
+      reportDataError(error);
+    }
   };
 
-  const restoreCourse = (course) => {
-    setCourses((prev) => [...prev, course]);
-    setArchive((prev) => ({ ...prev, courses: (prev.courses || []).filter((x) => x.id !== course.id) }));
+  const restoreCourse = async (course) => {
+    try {
+      await restoreRow("courses", course.id);
+      setCourses((prev) => [...prev, { ...course, archivedAt: null }]);
+      setArchive((prev) => ({ ...prev, courses: (prev.courses || []).filter((x) => x.id !== course.id) }));
+    } catch (error) {
+      reportDataError(error);
+    }
   };
 
   const startEditStudent = (student) => {
@@ -724,30 +1138,29 @@ export default function App() {
     setEditingStudentTeacherId("");
   };
 
-  const saveEditStudent = () => {
+  const saveEditStudent = async () => {
     const firstName = editingStudentFirstName.trim();
     const lastName = editingStudentLastName.trim();
     if (!firstName && !lastName) return;
-    setStudents((prev) =>
-      prev.map((student) =>
-        student.id === editingStudentId
-          ? {
-              ...student,
-              name: [firstName, lastName].filter(Boolean).join(" "),
-              firstName,
-              lastName,
-              age: editingStudentAge.trim(),
-              city: editingStudentCity.trim(),
-              phone: editingStudentPhone.trim(),
-              email: editingStudentEmail.trim(),
-              course: editingStudentCourse,
-              group: editingStudentGroup,
-              teacherId: editingStudentTeacherId ? Number(editingStudentTeacherId) : null,
-            }
-          : student
-      )
-    );
-    cancelEditStudent();
+    const nextStudent = {
+      name: [firstName, lastName].filter(Boolean).join(" "),
+      firstName,
+      lastName,
+      age: editingStudentAge.trim(),
+      city: editingStudentCity.trim(),
+      phone: editingStudentPhone.trim(),
+      email: editingStudentEmail.trim(),
+      course: editingStudentCourse,
+      group: editingStudentGroup,
+      teacherId: editingStudentTeacherId || null,
+    };
+    try {
+      const savedStudent = await updateRow("students", editingStudentId, studentToRow(nextStudent), normalizeStudent);
+      setStudents((prev) => prev.map((student) => (student.id === editingStudentId ? savedStudent || { ...student, ...nextStudent } : student)));
+      cancelEditStudent();
+    } catch (error) {
+      reportDataError(error);
+    }
   };
 
   const startEditTeacher = (teacher) => {
@@ -758,27 +1171,26 @@ export default function App() {
     setEditingTeacherPercent(teacher.percent);
   };
 
-  const saveEditTeacher = () => {
+  const saveEditTeacher = async () => {
     const firstName = editingTeacherFirstName.trim();
     const lastName = editingTeacherLastName.trim();
     if (!firstName && !lastName) return;
-    setTeachers((prev) =>
-      prev.map((teacher) =>
-        teacher.id === editingTeacherId
-          ? {
-              ...teacher,
-              name: [firstName, lastName].filter(Boolean).join(" "),
-              firstName,
-              lastName,
-              percent: Number(editingTeacherPercent),
-            }
-          : teacher
-      )
-    );
-    setEditingTeacherId(null);
-    setEditingTeacherFirstName("");
-    setEditingTeacherLastName("");
-    setEditingTeacherPercent(80);
+    const nextTeacher = {
+      name: [firstName, lastName].filter(Boolean).join(" "),
+      firstName,
+      lastName,
+      percent: Number(editingTeacherPercent),
+    };
+    try {
+      const savedTeacher = await updateRow("teachers", editingTeacherId, teacherToRow(nextTeacher), normalizeTeacher);
+      setTeachers((prev) => prev.map((teacher) => (teacher.id === editingTeacherId ? savedTeacher || { ...teacher, ...nextTeacher } : teacher)));
+      setEditingTeacherId(null);
+      setEditingTeacherFirstName("");
+      setEditingTeacherLastName("");
+      setEditingTeacherPercent(80);
+    } catch (error) {
+      reportDataError(error);
+    }
   };
 
   const openAssignStudentsModal = () => {
@@ -786,7 +1198,7 @@ export default function App() {
     setAssignTeacherId(initialTeacherId ? String(initialTeacherId) : "");
     setAssignStudentIds(
       initialTeacherId
-        ? students.filter((student) => Number(student.teacherId) === Number(initialTeacherId)).map((student) => Number(student.id))
+        ? students.filter((student) => sameId(student.teacherId, initialTeacherId)).map((student) => student.id)
         : []
     );
     setIsAssignStudentsModalOpen(true);
@@ -796,7 +1208,7 @@ export default function App() {
     setAssignTeacherId(teacherId);
     setAssignStudentIds(
       teacherId
-        ? students.filter((student) => Number(student.teacherId) === Number(teacherId)).map((student) => Number(student.id))
+        ? students.filter((student) => sameId(student.teacherId, teacherId)).map((student) => student.id)
         : []
     );
   };
@@ -807,15 +1219,14 @@ export default function App() {
     );
   };
 
-  const saveAssignedStudents = () => {
+  const saveAssignedStudents = async () => {
     if (!assignTeacherId) return;
-    setStudents((prev) =>
-      prev.map((student) => {
-        const isSelected = assignStudentIds.includes(Number(student.id));
-        const belongsToTeacher = Number(student.teacherId) === Number(assignTeacherId);
+    const nextStudents = students.map((student) => {
+        const isSelected = assignStudentIds.some((id) => sameId(id, student.id));
+        const belongsToTeacher = sameId(student.teacherId, assignTeacherId);
 
         if (isSelected) {
-          return { ...student, teacherId: Number(assignTeacherId) };
+          return { ...student, teacherId: assignTeacherId };
         }
 
         if (belongsToTeacher) {
@@ -823,10 +1234,26 @@ export default function App() {
         }
 
         return student;
-      })
-    );
-    setSelectedTeacherView(Number(assignTeacherId));
-    setIsAssignStudentsModalOpen(false);
+      });
+    const changedStudents = nextStudents.filter((student) => {
+      const previousStudent = students.find((item) => item.id === student.id);
+      return String(previousStudent?.teacherId || "") !== String(student.teacherId || "");
+    });
+
+    try {
+      const results = await Promise.all(
+        changedStudents.map((student) =>
+          supabase.from("students").update({ teacher_id: student.teacherId || null }).eq("id", student.id)
+        )
+      );
+      const firstError = results.find((result) => result.error)?.error;
+      if (firstError) throw firstError;
+      setStudents(nextStudents);
+      setSelectedTeacherView(assignTeacherId);
+      setIsAssignStudentsModalOpen(false);
+    } catch (error) {
+      reportDataError(error);
+    }
   };
 
   const startEditPayment = (payment) => {
@@ -837,31 +1264,32 @@ export default function App() {
     setEditingPaymentNote(payment.note || "");
   };
 
-  const saveEditPayment = () => {
+  const saveEditPayment = async () => {
     if (!editingPaymentAmount || !editingPaymentStudentId || !editingPaymentDate) return;
-    const student = students.find((s) => Number(s.id) === Number(editingPaymentStudentId));
-    const teacher = teachers.find((t) => Number(t.id) === Number(student?.teacherId));
-    setPayments((prev) =>
-      prev.map((payment) =>
-        payment.id === editingPaymentId
-          ? {
-              ...payment,
-              amount: parseMoney(editingPaymentAmount),
-              studentId: Number(editingPaymentStudentId),
-              studentName: student?.name || payment.studentName || "Pa student",
-              teacherId: student?.teacherId != null ? Number(student.teacherId) : null,
-              teacherName: teacher?.name || payment.teacherName || "Pa mësues",
-              note: editingPaymentNote.trim(),
-              date: `${editingPaymentDate}T00:00:00.000Z`,
-            }
-          : payment
-      )
-    );
-    setEditingPaymentId(null);
-    setEditingPaymentAmount("");
-    setEditingPaymentStudentId("");
-    setEditingPaymentDate("");
-    setEditingPaymentNote("");
+    const student = students.find((s) => sameId(s.id, editingPaymentStudentId));
+    const teacher = teachers.find((t) => sameId(t.id, student?.teacherId));
+    const existingPayment = payments.find((payment) => payment.id === editingPaymentId);
+    const nextPayment = 
+      {
+        amount: parseMoney(editingPaymentAmount),
+        studentId: editingPaymentStudentId,
+        studentName: student?.name || existingPayment?.studentName || "Pa student",
+        teacherId: student?.teacherId ?? null,
+        teacherName: teacher?.name || existingPayment?.teacherName || "Pa mësues",
+        note: editingPaymentNote.trim(),
+        date: `${editingPaymentDate}T00:00:00.000Z`,
+      };
+    try {
+      const savedPayment = await updateRow("payments", editingPaymentId, paymentToRow(nextPayment), normalizePayment);
+      setPayments((prev) => prev.map((payment) => (payment.id === editingPaymentId ? savedPayment || { ...payment, ...nextPayment } : payment)));
+      setEditingPaymentId(null);
+      setEditingPaymentAmount("");
+      setEditingPaymentStudentId("");
+      setEditingPaymentDate("");
+      setEditingPaymentNote("");
+    } catch (error) {
+      reportDataError(error);
+    }
   };
 
   const currentPaymentMonth = monthFromDate(new Date().toISOString());
@@ -871,7 +1299,7 @@ export default function App() {
   const getStudentCurrentPayments = (student) =>
     payments.filter(
       (payment) =>
-        Number(payment.studentId) === Number(student.id) &&
+        sameId(payment.studentId, student.id) &&
         monthFromDate(payment.date) === currentPaymentMonth
     );
   const hasStudentCurrentPayment = (student) => getStudentCurrentPayments(student).length > 0;
@@ -879,15 +1307,21 @@ export default function App() {
   const paymentAdminPercentValue = (payment) => Number(payment.adminPercent ?? 15);
   const paymentSchoolPercentValue = (payment) => Number(payment.schoolPercent ?? 5);
 
-  const toggleStudentPayment = (student) => {
+  const toggleStudentPayment = async (student) => {
     if (hasStudentCurrentPayment(student)) {
-      setPayments((prev) =>
-        prev.filter(
-          (payment) =>
-            Number(payment.studentId) !== Number(student.id) ||
-            monthFromDate(payment.date) !== currentPaymentMonth
-        )
-      );
+      const currentPayments = getStudentCurrentPayments(student);
+      try {
+        await Promise.all(currentPayments.map((payment) => deleteRow("payments", payment.id)));
+        setPayments((prev) =>
+          prev.filter(
+            (payment) =>
+              !sameId(payment.studentId, student.id) ||
+              monthFromDate(payment.date) !== currentPaymentMonth
+          )
+        );
+      } catch (error) {
+        reportDataError(error);
+      }
       return;
     }
 
@@ -897,26 +1331,29 @@ export default function App() {
       return;
     }
 
-    const teacher = teachers.find((t) => Number(t.id) === Number(student.teacherId));
-    setPayments((prev) => [
-      ...prev,
-      {
-        id: Date.now(),
-        studentId: Number(student.id),
-        studentName: student.name || "Pa student",
-        teacherId: student.teacherId != null ? Number(student.teacherId) : null,
-        teacherName: teacher?.name || "Pa mesues",
-        amount: getStudentCoursePrice(student),
-        teacherPercent: 80,
-        adminPercent: 15,
-        schoolPercent: 5,
-        date: new Date().toISOString(),
-      },
-    ]);
+    const teacher = teachers.find((t) => sameId(t.id, student.teacherId));
+    const nextPayment = {
+      studentId: student.id,
+      studentName: student.name || "Pa student",
+      teacherId: student.teacherId ?? null,
+      teacherName: teacher?.name || "Pa mesues",
+      amount: getStudentCoursePrice(student),
+      teacherPercent: 80,
+      adminPercent: 15,
+      schoolPercent: 5,
+      note: "",
+      date: new Date().toISOString(),
+    };
+    try {
+      const savedPayment = await insertRow("payments", paymentToRow(nextPayment), normalizePayment);
+      setPayments((prev) => [...prev, savedPayment]);
+    } catch (error) {
+      reportDataError(error);
+    }
   };
 
   const filteredStudents = students.filter((student) => {
-    const teacher = teachers.find((t) => Number(t.id) === Number(student.teacherId));
+    const teacher = teachers.find((t) => sameId(t.id, student.teacherId));
     const q = studentSearch.trim().toLowerCase();
     if (!q) return true;
     return [
@@ -937,7 +1374,7 @@ export default function App() {
   );
 
   const selectedTeacherStudents = students.filter(
-    (student) => Number(student.teacherId) === Number(selectedTeacherView)
+    (student) => sameId(student.teacherId, selectedTeacherView)
   );
   const sortedSelectedTeacherStudents = sortRows(selectedTeacherStudents, "selectedTeacherStudents", {
     nr: (_student, index) => index + 1,
@@ -950,9 +1387,9 @@ export default function App() {
   const activeFinanceTeacherFilter = financeTeacherFilter && teachers.some((t) => t.name === financeTeacherFilter) ? financeTeacherFilter : "";
 
   const enrichedPayments = payments.map((payment) => {
-    const student = students.find((s) => Number(s.id) === Number(payment.studentId));
+    const student = students.find((s) => sameId(s.id, payment.studentId));
     const fallbackTeacherId = payment.teacherId != null ? payment.teacherId : student?.teacherId != null ? student.teacherId : null;
-    const teacher = teachers.find((t) => Number(t.id) === Number(fallbackTeacherId));
+    const teacher = teachers.find((t) => sameId(t.id, fallbackTeacherId));
     return {
       ...payment,
       studentName: payment.studentName || student?.name || "Pa student",
@@ -990,10 +1427,10 @@ export default function App() {
     return teachers
       .filter((teacher) => !activeFinanceTeacherFilter || teacher.name === activeFinanceTeacherFilter)
       .map((teacher) => {
-        const teacherStudents = students.filter((student) => Number(student.teacherId) === Number(teacher.id));
-        const teacherStudentIds = teacherStudents.map((student) => Number(student.id));
+        const teacherStudents = students.filter((student) => sameId(student.teacherId, teacher.id));
+        const teacherStudentIds = teacherStudents.map((student) => student.id);
         const relevantPayments = payments.filter((payment) => {
-          const sameTeacher = teacherStudentIds.includes(Number(payment.studentId));
+          const sameTeacher = teacherStudentIds.some((studentId) => sameId(studentId, payment.studentId));
           const sameMonth = financeMonth ? monthFromDate(payment.date) === financeMonth : true;
           return sameTeacher && sameMonth;
         });
@@ -1069,14 +1506,14 @@ export default function App() {
     city: (student) => student.city,
     course: (student) => student.course,
     group: (student) => student.group,
-    teacherName: (student) => teachers.find((teacher) => Number(teacher.id) === Number(student.teacherId))?.name || "Pa mesues",
+    teacherName: (student) => teachers.find((teacher) => sameId(teacher.id, student.teacherId))?.name || "Pa mesues",
     payment: (student) => (hasStudentCurrentPayment(student) ? 1 : 0),
   });
 
   const filteredTeachers = teachers.filter((teacher) => {
     const q = teacherSearch.trim().toLowerCase();
     if (!q) return true;
-    const teacherStudents = students.filter((student) => Number(student.teacherId) === Number(teacher.id));
+    const teacherStudents = students.filter((student) => sameId(student.teacherId, teacher.id));
     return (
       teacher.name.toLowerCase().includes(q) ||
       (teacher.firstName || "").toLowerCase().includes(q) ||
@@ -1090,7 +1527,7 @@ export default function App() {
     nr: (_teacher, index) => index + 1,
     name: (teacher) => teacher.firstName || teacher.name,
     lastName: (teacher) => teacher.lastName,
-    studentsCount: (teacher) => students.filter((student) => Number(student.teacherId) === Number(teacher.id)).length,
+    studentsCount: (teacher) => students.filter((student) => sameId(student.teacherId, teacher.id)).length,
   });
 
   const sortedPayments = sortRows(filteredPayments, "payments", {
@@ -1115,9 +1552,9 @@ export default function App() {
 
   const financePaymentRows = payments
     .map((payment) => {
-      const student = students.find((item) => Number(item.id) === Number(payment.studentId));
+      const student = students.find((item) => sameId(item.id, payment.studentId));
       const fallbackTeacherId = payment.teacherId != null ? payment.teacherId : student?.teacherId;
-      const teacher = teachers.find((item) => Number(item.id) === Number(fallbackTeacherId));
+      const teacher = teachers.find((item) => sameId(item.id, fallbackTeacherId));
       if (!teacher) return null;
       if (financeMonth && monthFromDate(payment.date) !== financeMonth) return null;
       if (activeFinanceTeacherFilter && teacher.name !== activeFinanceTeacherFilter) return null;
@@ -1138,9 +1575,9 @@ export default function App() {
   const overviewPayments = payments.filter((payment) => monthFromDate(payment.date) === financeOverviewMonth);
   const overviewIncome = overviewPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
   const overviewTeacherPay = overviewPayments.reduce((sum, payment) => {
-    const student = students.find((item) => Number(item.id) === Number(payment.studentId));
+    const student = students.find((item) => sameId(item.id, payment.studentId));
     const fallbackTeacherId = payment.teacherId != null ? payment.teacherId : student?.teacherId;
-    const teacher = teachers.find((item) => Number(item.id) === Number(fallbackTeacherId));
+    const teacher = teachers.find((item) => sameId(item.id, fallbackTeacherId));
     return sum + Number(payment.amount || 0) * (paymentTeacherPercentValue(payment, teacher) / 100);
   }, 0);
   const overviewSchoolShare = overviewPayments.reduce(
@@ -1174,7 +1611,7 @@ export default function App() {
   const sortedArchiveStudents = sortRows(filteredArchiveStudents, "archive", {
     nr: (_student, index) => index + 1,
     name: (student) => student.name,
-    teacherName: (student) => teachers.find((teacher) => Number(teacher.id) === Number(student.teacherId))?.name || "Pa mesues",
+    teacherName: (student) => teachers.find((teacher) => sameId(teacher.id, student.teacherId))?.name || "Pa mesues",
   });
 
   const sortedArchiveTeachers = sortRows(filteredArchiveTeachers, "archive", {
@@ -1197,49 +1634,67 @@ export default function App() {
     }));
   };
 
-  const bulkRestore = (type) => {
+  const bulkRestore = async (type) => {
     const ids = archiveSelection[type] || [];
     if (!ids.length) return;
 
-    if (type === "students") {
-      const items = archive.students.filter((item) => ids.includes(item.id));
-      setStudents((prev) => [...prev, ...items]);
-      setArchive((prev) => ({ ...prev, students: prev.students.filter((item) => !ids.includes(item.id)) }));
-    }
+    try {
+      const { error } = await supabase.from(type).update({ archived_at: null }).in("id", ids);
+      if (error) throw error;
 
-    if (type === "teachers") {
-      const items = archive.teachers.filter((item) => ids.includes(item.id));
-      setTeachers((prev) => [...prev, ...items]);
-      setArchive((prev) => ({ ...prev, teachers: prev.teachers.filter((item) => !ids.includes(item.id)) }));
-    }
+      if (type === "students") {
+        const items = archive.students.filter((item) => ids.includes(item.id)).map((item) => ({ ...item, archivedAt: null }));
+        setStudents((prev) => [...prev, ...items]);
+        setArchive((prev) => ({ ...prev, students: prev.students.filter((item) => !ids.includes(item.id)) }));
+      }
 
-    if (type === "payments") {
-      const items = archive.payments.filter((item) => ids.includes(item.id));
-      setPayments((prev) => [...prev, ...items]);
-      setArchive((prev) => ({ ...prev, payments: prev.payments.filter((item) => !ids.includes(item.id)) }));
-    }
+      if (type === "teachers") {
+        const items = archive.teachers.filter((item) => ids.includes(item.id)).map((item) => ({ ...item, archivedAt: null }));
+        setTeachers((prev) => [...prev, ...items]);
+        setArchive((prev) => ({ ...prev, teachers: prev.teachers.filter((item) => !ids.includes(item.id)) }));
+      }
 
-    if (type === "courses") {
-      const items = (archive.courses || []).filter((item) => ids.includes(item.id));
-      setCourses((prev) => [...prev, ...items]);
-      setArchive((prev) => ({ ...prev, courses: (prev.courses || []).filter((item) => !ids.includes(item.id)) }));
-    }
+      if (type === "payments") {
+        const items = archive.payments.filter((item) => ids.includes(item.id)).map((item) => ({ ...item, archivedAt: null }));
+        setPayments((prev) => [...prev, ...items]);
+        setArchive((prev) => ({ ...prev, payments: prev.payments.filter((item) => !ids.includes(item.id)) }));
+      }
 
-    setArchiveSelection((prev) => ({ ...prev, [type]: [] }));
+      if (type === "courses") {
+        const items = (archive.courses || []).filter((item) => ids.includes(item.id)).map((item) => ({ ...item, archivedAt: null }));
+        setCourses((prev) => [...prev, ...items]);
+        setArchive((prev) => ({ ...prev, courses: (prev.courses || []).filter((item) => !ids.includes(item.id)) }));
+      }
+
+      setArchiveSelection((prev) => ({ ...prev, [type]: [] }));
+    } catch (error) {
+      reportDataError(error);
+    }
   };
 
-  const deleteArchivedItem = (type, id) => {
-    if (!window.confirm("A je i sigurt që don me e fshi përgjithmonë?")) return;
-    setArchive((prev) => ({ ...prev, [type]: (prev[type] || []).filter((item) => item.id !== id) }));
-    setArchiveSelection((prev) => ({ ...prev, [type]: prev[type].filter((itemId) => itemId !== id) }));
+  const deleteArchivedItem = async (type, id) => {
+    if (!window.confirm("A je i sigurt qe don me e fshi pergjithmone?")) return;
+    try {
+      await deleteRow(type, id);
+      setArchive((prev) => ({ ...prev, [type]: (prev[type] || []).filter((item) => item.id !== id) }));
+      setArchiveSelection((prev) => ({ ...prev, [type]: (prev[type] || []).filter((itemId) => itemId !== id) }));
+    } catch (error) {
+      reportDataError(error);
+    }
   };
 
-  const bulkDeleteArchived = (type) => {
-    if (!window.confirm("A je i sigurt që don me i fshi këto përgjithmonë?")) return;
+  const bulkDeleteArchived = async (type) => {
+    if (!window.confirm("A je i sigurt qe don me i fshi keto pergjithmone?")) return;
     const ids = archiveSelection[type] || [];
     if (!ids.length) return;
-    setArchive((prev) => ({ ...prev, [type]: (prev[type] || []).filter((item) => !ids.includes(item.id)) }));
-    setArchiveSelection((prev) => ({ ...prev, [type]: [] }));
+    try {
+      const { error } = await supabase.from(type).delete().in("id", ids);
+      if (error) throw error;
+      setArchive((prev) => ({ ...prev, [type]: (prev[type] || []).filter((item) => !ids.includes(item.id)) }));
+      setArchiveSelection((prev) => ({ ...prev, [type]: [] }));
+    } catch (error) {
+      reportDataError(error);
+    }
   };
 
   const openFinanceExportNoteModal = (type) => {
@@ -1417,6 +1872,60 @@ export default function App() {
     { key: "archive", label: "Archive" },
   ];
 
+  if (isAuthLoading) {
+    return (
+      <div className={`${shell} flex min-h-screen items-center justify-center p-4`} style={{ background: HIGHLIGHT }}>
+        <div className="w-full max-w-md rounded-lg bg-white p-6 text-center shadow-xl">
+          <div className="mb-4 flex justify-center">
+            <BrandMark />
+          </div>
+          <h1 className="text-2xl font-bold" style={{ color: PRIMARY }}>Vatra e Dituris&euml;</h1>
+          <p className="mt-2 text-gray-500">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <div className={`${shell} flex min-h-screen items-center justify-center p-4`} style={{ background: HIGHLIGHT }}>
+        <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
+          <div className="mb-5 flex items-center justify-center gap-3">
+            <BrandMark />
+            <div>
+              <h1 className="text-2xl font-bold leading-tight" style={{ color: PRIMARY }}>Vatra e Dituris&euml;</h1>
+              <p className="text-sm text-gray-500">Sign in to continue.</p>
+            </div>
+          </div>
+
+          {!isSupabaseConfigured && (
+            <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              Supabase is not configured yet. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to .env.local.
+            </div>
+          )}
+
+          {authError && (
+            <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {authError}
+            </div>
+          )}
+
+          <div className="flex justify-center">
+            <button
+              type="button"
+              onClick={signInWithGoogle}
+              className={mainBtn}
+              style={isSupabaseConfigured ? primaryBtnStyle : disabledPrimaryBtnStyle}
+              disabled={!isSupabaseConfigured}
+            >
+              Sign in with Google
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={`${shell} h-dvh min-h-screen overflow-hidden flex flex-col lg:flex-row`} style={{ background: HIGHLIGHT }}>
       <aside className={`relative w-full ${isSidebarCollapsed ? "lg:w-20" : "lg:w-64"} lg:h-full shrink-0 overflow-hidden border-b lg:border-b-0 lg:border-r ${sidebar} p-3 sm:p-4 flex flex-col sticky top-0 z-40 transition-all duration-200`} style={{ background: PRIMARY }}>
@@ -1481,6 +1990,11 @@ export default function App() {
       </aside>
 
       <main className="flex-1 min-h-0 p-3 sm:p-4 lg:p-6 space-y-4 lg:space-y-6 overflow-auto">
+        {(isDataLoading || dataError) && (
+          <div className={`rounded-lg border p-3 text-sm ${dataError ? "border-red-200 bg-red-50 text-red-700" : "border-gray-200 bg-white text-gray-500"}`}>
+            {dataError || "Loading Supabase data..."}
+          </div>
+        )}
         {activeView === "students" && (
           <div className={`border rounded-lg lg:rounded-2xl shadow-sm ${card} p-3 sm:p-4`}>
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
@@ -1533,7 +2047,7 @@ export default function App() {
                 </thead>
                 <tbody>
                   {sortedStudents.map((student) => {
-                    const teacher = teachers.find((t) => Number(t.id) === Number(student.teacherId));
+                    const teacher = teachers.find((t) => sameId(t.id, student.teacherId));
                     const isSelected = selectedStudentView === student.id;
                     const isEditing = editingStudentId === student.id;
                     const hasPayment = hasStudentCurrentPayment(student);
@@ -1653,7 +2167,7 @@ export default function App() {
                   {sortedTeachers.map((teacher) => {
                     const isSelected = selectedTeacherView === teacher.id;
                     const isEditing = editingTeacherId === teacher.id;
-                    const countStudents = students.filter((student) => Number(student.teacherId) === Number(teacher.id)).length;
+                    const countStudents = students.filter((student) => sameId(student.teacherId, teacher.id)).length;
                     return (
                       <tr key={teacher.id} onClick={() => setSelectedTeacherView((prev) => (prev === teacher.id ? null : teacher.id))} className={`${rowHover} cursor-pointer ${isSelected ? selectedRow : ""}`}>
                         <td className={tdClass}>{rowNumber(filteredTeachers, teacher)}</td>
@@ -2057,7 +2571,7 @@ export default function App() {
                   </thead>
                   <tbody>
                     {sortedArchiveStudents.map((student) => {
-                      const teacher = teachers.find((t) => Number(t.id) === Number(student.teacherId));
+                      const teacher = teachers.find((t) => sameId(t.id, student.teacherId));
                       return (
                         <tr key={student.id} className={rowHover}>
                           <td className={tdClass}>{rowNumber(filteredArchiveStudents, student)}</td>
@@ -2425,19 +2939,19 @@ export default function App() {
               </select>
 
               <div className="max-h-[50vh] overflow-y-auto rounded-lg border border-gray-200">
-                {students.some((student) => !student.teacherId || Number(student.teacherId) === Number(assignTeacherId)) ? (
+                {students.some((student) => !student.teacherId || sameId(student.teacherId, assignTeacherId)) ? (
                   students
-                    .filter((student) => !student.teacherId || Number(student.teacherId) === Number(assignTeacherId))
+                    .filter((student) => !student.teacherId || sameId(student.teacherId, assignTeacherId))
                     .map((student) => {
-                    const currentTeacher = teachers.find((teacher) => Number(teacher.id) === Number(student.teacherId));
-                    const isChecked = assignStudentIds.includes(Number(student.id));
+                    const currentTeacher = teachers.find((teacher) => sameId(teacher.id, student.teacherId));
+                    const isChecked = assignStudentIds.some((id) => sameId(id, student.id));
                     return (
                       <label key={student.id} className="flex items-start gap-3 border-b border-gray-100 px-3 py-3 last:border-b-0">
                         <input
                           type="checkbox"
                           className={`${roundCheckbox} mt-1`}
                           checked={isChecked}
-                          onChange={() => toggleAssignStudent(Number(student.id))}
+                          onChange={() => toggleAssignStudent(student.id)}
                           disabled={!assignTeacherId}
                         />
                         <span className="flex-1">
@@ -2469,15 +2983,27 @@ export default function App() {
                 </span>
                 <div>
                   <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>Settings</h3>
-                  <p className="text-sm text-gray-500">Google sign in will be connected later.</p>
+                  <p className="text-sm text-gray-500">{currentUser?.email ? `Signed in as ${currentUser.email}` : "Manage your account."}</p>
                 </div>
               </div>
 
               <div className="flex flex-col gap-8">
-                <button type="button" className={`${mainBtn} opacity-60`} style={secondaryBtnStyle} disabled>
-                  Sign in with Google
-                </button>
-                <button type="button" className={`${mainBtn} opacity-60`} style={dangerBtnStyle} disabled>
+                {authError && (
+                  <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                    {authError}
+                  </div>
+                )}
+                {!currentUser && (
+                  <button
+                    type="button"
+                    onClick={signInWithGoogle}
+                    className={mainBtn}
+                    style={secondaryBtnStyle}
+                  >
+                    Sign in with Google
+                  </button>
+                )}
+                <button type="button" onClick={signOut} className={mainBtn} style={dangerBtnStyle}>
                   Sign out
                 </button>
               </div>
