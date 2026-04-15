@@ -2833,6 +2833,13 @@ export default function App() {
               </table>
             </div>
 
+            <div className="mt-6 flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm">
+              <span className="font-semibold" style={{ color: PRIMARY }}>Administrata</span>
+              <span className="font-bold">
+                {formatCurrency(sortedTeacherEarnings.reduce((sum, teacher) => sum + Number(teacher.adminShare || 0), 0))}
+              </span>
+            </div>
+
             {selectedPagaTeacherView && (
               <div className="mt-6 border rounded-lg lg:rounded-2xl p-3 sm:p-4 bg-gray-50 border-gray-200">
                 <h3 className="text-lg font-bold mb-3" style={{ color: PRIMARY }}>
@@ -2869,12 +2876,6 @@ export default function App() {
               </div>
             )}
 
-            <div className="mt-6 flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm">
-              <span className="font-semibold" style={{ color: PRIMARY }}>Administrata</span>
-              <span className="font-bold">
-                {formatCurrency(sortedTeacherEarnings.reduce((sum, teacher) => sum + Number(teacher.adminShare || 0), 0))}
-              </span>
-            </div>
           </div>
         )}
 
