@@ -149,6 +149,22 @@ function sameId(a, b) {
   return String(a ?? "") === String(b ?? "");
 }
 
+function authRedirectUrl() {
+  const configuredUrl = import.meta.env.VITE_SUPABASE_REDIRECT_URL?.trim();
+  const fallbackUrl = window.location.origin;
+  if (!configuredUrl) return fallbackUrl;
+
+  const normalizedUrl = /^https?:\/\//i.test(configuredUrl)
+    ? configuredUrl
+    : `https://${configuredUrl}`;
+
+  try {
+    return new URL(normalizedUrl).origin;
+  } catch {
+    return fallbackUrl;
+  }
+}
+
 export default function App() {
   const PRIMARY = "#2e2c80";
   const SECONDARY = "#54807f";
@@ -687,7 +703,7 @@ export default function App() {
       return;
     }
 
-    const redirectTo = import.meta.env.VITE_SUPABASE_REDIRECT_URL || window.location.origin;
+    const redirectTo = authRedirectUrl();
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
