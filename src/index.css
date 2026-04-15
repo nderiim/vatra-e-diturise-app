@@ -1,1 +1,27 @@
 @import "tailwindcss";
+
+@media (orientation: landscape) and (pointer: coarse) and (max-height: 850px) {
+  .app-sidebar .sidebar-brand {
+    margin-bottom: 0.5rem !important;
+  }
+
+  .app-sidebar .sidebar-collapse-button {
+    margin-bottom: 0.375rem !important;
+  }
+
+  .app-sidebar .sidebar-nav > :not([hidden]) ~ :not([hidden]) {
+    margin-top: 0.25rem !important;
+  }
+
+  .app-sidebar .sidebar-settings-button {
+    margin-top: 0.4rem !important;
+  }
+}
+
+@media (orientation: portrait) and (pointer: coarse) and (max-width: 1023px) {
+  .app-sidebar {
+    height: 100dvh !important;
+    max-height: 100dvh !important;
+    min-height: 0 !important;
+  }
+}

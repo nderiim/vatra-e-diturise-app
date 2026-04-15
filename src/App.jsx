@@ -114,6 +114,7 @@ const emptyTeacherForm = {
 const emptyCourseForm = {
   name: "",
   price: "",
+  pricingType: "fixed",
 };
 
 function normalizeExcelKey(key) {
@@ -128,6 +129,20 @@ function getExcelValue(row, keys) {
   const normalizedKeys = keys.map(normalizeExcelKey);
   const match = Object.entries(row).find(([key]) => normalizedKeys.includes(normalizeExcelKey(key)));
   return match ? String(match[1] || "").trim() : "";
+}
+
+function sheetFromRows(rows) {
+  const worksheet = XLSX.utils.aoa_to_sheet(rows);
+  worksheet["!cols"] = rows[0]?.map((_, columnIndex) => ({
+    wch: Math.min(
+      Math.max(
+        ...rows.map((row) => String(row[columnIndex] ?? "").length),
+        10
+      ) + 2,
+      40
+    ),
+  }));
+  return worksheet;
 }
 
 function sameId(a, b) {
@@ -150,6 +165,7 @@ export default function App() {
     teachers: [],
     payments: [],
     courses: [],
+    expenses: [],
   });
   const [expenses, setExpenses] = useState([]);
   const [isDataLoading, setIsDataLoading] = useState(false);
@@ -157,7 +173,9 @@ export default function App() {
 
   const [activeView, setActiveView] = useState("students");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [selectedTeacherView, setSelectedTeacherView] = useState(null);
+  const [selectedPagaTeacherView, setSelectedPagaTeacherView] = useState(null);
   const [selectedStudentView, setSelectedStudentView] = useState(null);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isAllIncomeModalOpen, setIsAllIncomeModalOpen] = useState(false);
@@ -175,9 +193,12 @@ export default function App() {
   const [editingCourseId, setEditingCourseId] = useState(null);
   const [editingCourseName, setEditingCourseName] = useState("");
   const [editingCoursePrice, setEditingCoursePrice] = useState("");
+  const [editingCoursePricingType, setEditingCoursePricingType] = useState("fixed");
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState("");
   const [paymentAmount, setPaymentAmount] = useState("");
+  const [paymentHours, setPaymentHours] = useState("");
+  const [paymentRate, setPaymentRate] = useState("");
   const [paymentNote, setPaymentNote] = useState("");
   const [paymentDate, setPaymentDate] = useState(currentDateInput());
   const [paymentTeacherPercent, setPaymentTeacherPercent] = useState(80);
@@ -200,7 +221,6 @@ export default function App() {
   const [expenseDate, setExpenseDate] = useState(currentDateInput());
   const [expenseAmount, setExpenseAmount] = useState("");
   const [expenseNote, setExpenseNote] = useState("");
-  const [expenseMonthFilter, setExpenseMonthFilter] = useState(currentMonthInput());
   const [editingExpenseId, setEditingExpenseId] = useState(null);
   const [editingExpenseName, setEditingExpenseName] = useState("");
   const [editingExpenseDate, setEditingExpenseDate] = useState("");
@@ -230,6 +250,9 @@ export default function App() {
   const [editingPaymentStudentId, setEditingPaymentStudentId] = useState("");
   const [editingPaymentDate, setEditingPaymentDate] = useState("");
   const [editingPaymentNote, setEditingPaymentNote] = useState("");
+  const [editingPaymentHours, setEditingPaymentHours] = useState("");
+  const [editingPaymentRate, setEditingPaymentRate] = useState("");
+  const [editingPaymentType, setEditingPaymentType] = useState("fixed");
   const [isFinanceExportNoteModalOpen, setIsFinanceExportNoteModalOpen] = useState(false);
   const [pendingFinanceExportType, setPendingFinanceExportType] = useState("");
   const [financeExportNote, setFinanceExportNote] = useState("");
@@ -239,6 +262,7 @@ export default function App() {
     teachers: [],
     payments: [],
     courses: [],
+    expenses: [],
   });
   const [sortConfig, setSortConfig] = useState({
     students: { key: "firstName", direction: "asc" },
@@ -249,6 +273,7 @@ export default function App() {
     courses: { key: "name", direction: "asc" },
     selectedTeacherStudents: { key: "nr", direction: "asc" },
     archive: { key: "name", direction: "asc" },
+    archiveExpenses: { key: "date", direction: "desc" },
   });
 
   const percentOptions = [60, 65, 70, 75, 80];
@@ -349,6 +374,7 @@ export default function App() {
     id: row.id,
     name: row.name || "",
     price: Number(row.price || 0),
+    pricingType: row.pricing_type || "fixed",
     archivedAt: row.archived_at,
   });
 
@@ -362,6 +388,9 @@ export default function App() {
     teacherPercent: Number(row.teacher_percent ?? 80),
     adminPercent: Number(row.admin_percent ?? 15),
     schoolPercent: Number(row.school_percent ?? 5),
+    paymentType: row.payment_type || "fixed",
+    hours: row.hours == null ? "" : String(row.hours),
+    rate: row.rate == null ? "" : Number(row.rate || 0),
     note: row.note || "",
     date: row.date,
     archivedAt: row.archived_at,
@@ -399,6 +428,7 @@ export default function App() {
   const courseToRow = (course) => ({
     name: course.name,
     price: Number(course.price || 0),
+    pricing_type: course.pricingType || "fixed",
   });
 
   const paymentToRow = (payment) => ({
@@ -410,6 +440,9 @@ export default function App() {
     teacher_percent: Number(payment.teacherPercent ?? 80),
     admin_percent: Number(payment.adminPercent ?? 15),
     school_percent: Number(payment.schoolPercent ?? 5),
+    payment_type: payment.paymentType || "fixed",
+    hours: payment.hours === "" || payment.hours == null ? null : Number(payment.hours),
+    rate: payment.rate === "" || payment.rate == null ? null : Number(payment.rate),
     note: payment.note || "",
     date: payment.date,
   });
@@ -468,17 +501,19 @@ export default function App() {
     const nextTeachers = splitArchived(teachersResult.data || [], normalizeTeacher);
     const nextCourses = splitArchived(coursesResult.data || [], normalizeCourse);
     const nextPayments = splitArchived(paymentsResult.data || [], normalizePayment);
+    const nextExpenses = splitArchived(expensesResult.data || [], normalizeExpense);
 
     setStudents(nextStudents.active);
     setTeachers(nextTeachers.active);
     setCourses(nextCourses.active);
     setPayments(nextPayments.active);
-    setExpenses((expensesResult.data || []).map(normalizeExpense));
+    setExpenses(nextExpenses.active);
     setArchive({
       students: nextStudents.archived,
       teachers: nextTeachers.archived,
       courses: nextCourses.archived,
       payments: nextPayments.archived,
+      expenses: nextExpenses.archived,
     });
     if (showLoading) setIsDataLoading(false);
   };
@@ -615,13 +650,7 @@ export default function App() {
       if (table === "teachers") syncActiveAndArchive(setTeachers, "teachers", normalizeTeacher);
       if (table === "courses") syncActiveAndArchive(setCourses, "courses", normalizeCourse);
       if (table === "payments") syncActiveAndArchive(setPayments, "payments", normalizePayment);
-      if (table === "expenses") {
-        if (isDelete || payload.new?.archived_at) {
-          setExpenses((prev) => removeById(prev, id));
-          return;
-        }
-        setExpenses((prev) => upsertById(prev, normalizeExpense(payload.new)));
-      }
+      if (table === "expenses") syncActiveAndArchive(setExpenses, "expenses", normalizeExpense);
     };
 
     const channel = supabase.channel("app-data-realtime");
@@ -729,6 +758,10 @@ export default function App() {
       <span>{sortConfig[table]?.key === key ? (sortConfig[table].direction === "asc" ? "▲" : "▼") : ""}</span>
     </button>
   );
+
+  const isHourlyCourse = (course) => (course?.pricingType || "fixed") === "hourly";
+  const hourlyPaymentAmount = (hours, rate) => Number(hours || 0) * parseMoney(rate);
+  const pricingTypeLabel = (type) => ((type || "fixed") === "hourly" ? "Me orë" : "Mujore");
 
   useEffect(() => {
     setPayments((prev) => {
@@ -888,6 +921,7 @@ export default function App() {
     const nextCourse = {
       name: courseForm.name.trim(),
       price: parseFloat(courseForm.price),
+      pricingType: courseForm.pricingType,
     };
     try {
       const savedCourse = await insertRow("courses", courseToRow(nextCourse), normalizeCourse);
@@ -903,6 +937,7 @@ export default function App() {
     setEditingCourseId(course.id);
     setEditingCourseName(course.name);
     setEditingCoursePrice(String(course.price));
+    setEditingCoursePricingType(course.pricingType || "fixed");
   };
 
   const saveEditCourse = async () => {
@@ -910,6 +945,7 @@ export default function App() {
     const nextCourse = {
       name: editingCourseName.trim(),
       price: parseFloat(editingCoursePrice),
+      pricingType: editingCoursePricingType,
     };
     try {
       const savedCourse = await updateRow("courses", editingCourseId, courseToRow(nextCourse), normalizeCourse);
@@ -917,6 +953,7 @@ export default function App() {
       setEditingCourseId(null);
       setEditingCourseName("");
       setEditingCoursePrice("");
+      setEditingCoursePricingType("fixed");
     } catch (error) {
       reportDataError(error);
     }
@@ -925,6 +962,8 @@ export default function App() {
   const openPaymentModal = () => {
     setSelectedStudent("");
     setPaymentAmount("");
+    setPaymentHours("");
+    setPaymentRate("");
     setPaymentNote("");
     setPaymentDate(currentDateInput());
     setPaymentTeacherPercent(80);
@@ -936,14 +975,37 @@ export default function App() {
   const changePaymentStudent = (studentId) => {
     setSelectedStudent(studentId);
     const student = students.find((s) => sameId(s.id, studentId));
+    const course = student ? getStudentCourse(student) : null;
     const price = student ? getStudentCoursePrice(student) : 0;
+    if (isHourlyCourse(course)) {
+      setPaymentHours("");
+      setPaymentRate(price ? String(price) : "10");
+      setPaymentAmount("");
+      return;
+    }
+    setPaymentHours("");
+    setPaymentRate("");
     setPaymentAmount(price ? formatExportCurrency(price) : "");
+  };
+
+  const changePaymentHours = (hours) => {
+    setPaymentHours(hours);
+    const amount = hourlyPaymentAmount(hours, paymentRate);
+    setPaymentAmount(amount ? formatExportCurrency(amount) : "");
+  };
+
+  const changePaymentRate = (rate) => {
+    setPaymentRate(rate);
+    const amount = hourlyPaymentAmount(paymentHours, rate);
+    setPaymentAmount(amount ? formatExportCurrency(amount) : "");
   };
 
   const addPayment = async () => {
     if (!paymentAmount || !selectedStudent) return;
     const student = students.find((s) => sameId(s.id, selectedStudent));
     const teacher = teachers.find((t) => sameId(t.id, student?.teacherId));
+    const course = student ? getStudentCourse(student) : null;
+    const isHourly = isHourlyCourse(course);
     const nextPayment = 
       {
         studentId: selectedStudent,
@@ -954,6 +1016,9 @@ export default function App() {
         teacherPercent: Number(paymentTeacherPercent),
         adminPercent: Number(paymentAdminPercent),
         schoolPercent: Number(paymentSchoolPercent),
+        paymentType: isHourly ? "hourly" : "fixed",
+        hours: isHourly ? paymentHours : "",
+        rate: isHourly ? parseMoney(paymentRate) : "",
         note: paymentNote.trim(),
         date: paymentDate ? `${paymentDate}T00:00:00.000Z` : new Date().toISOString(),
       };
@@ -961,6 +1026,8 @@ export default function App() {
       const savedPayment = await insertRow("payments", paymentToRow(nextPayment), normalizePayment);
       setPayments((prev) => [...prev, savedPayment]);
       setPaymentAmount("");
+      setPaymentHours("");
+      setPaymentRate("");
       setPaymentNote("");
       setSelectedStudent("");
       setPaymentDate(currentDateInput());
@@ -1072,6 +1139,16 @@ export default function App() {
     }
   };
 
+  const archiveExpense = async (expense) => {
+    try {
+      await archiveRow("expenses", expense.id);
+      setArchive((prev) => ({ ...prev, expenses: [...(prev.expenses || []), { ...expense, archivedAt: new Date().toISOString() }] }));
+      setExpenses((prev) => prev.filter((item) => item.id !== expense.id));
+    } catch (error) {
+      reportDataError(error);
+    }
+  };
+
   const restoreStudent = async (student) => {
     try {
       await restoreRow("students", student.id);
@@ -1107,6 +1184,16 @@ export default function App() {
       await restoreRow("courses", course.id);
       setCourses((prev) => [...prev, { ...course, archivedAt: null }]);
       setArchive((prev) => ({ ...prev, courses: (prev.courses || []).filter((x) => x.id !== course.id) }));
+    } catch (error) {
+      reportDataError(error);
+    }
+  };
+
+  const restoreExpense = async (expense) => {
+    try {
+      await restoreRow("expenses", expense.id);
+      setExpenses((prev) => [...prev, { ...expense, archivedAt: null }]);
+      setArchive((prev) => ({ ...prev, expenses: (prev.expenses || []).filter((x) => x.id !== expense.id) }));
     } catch (error) {
       reportDataError(error);
     }
@@ -1263,6 +1350,9 @@ export default function App() {
     setEditingPaymentStudentId(String(payment.studentId));
     setEditingPaymentDate(payment.date ? String(payment.date).slice(0, 10) : "");
     setEditingPaymentNote(payment.note || "");
+    setEditingPaymentHours(payment.hours == null ? "" : String(payment.hours));
+    setEditingPaymentRate(payment.rate == null ? "" : String(payment.rate));
+    setEditingPaymentType(payment.paymentType || "fixed");
   };
 
   const saveEditPayment = async () => {
@@ -1270,6 +1360,7 @@ export default function App() {
     const student = students.find((s) => sameId(s.id, editingPaymentStudentId));
     const teacher = teachers.find((t) => sameId(t.id, student?.teacherId));
     const existingPayment = payments.find((payment) => payment.id === editingPaymentId);
+    const isHourly = editingPaymentType === "hourly";
     const nextPayment = 
       {
         amount: parseMoney(editingPaymentAmount),
@@ -1277,6 +1368,12 @@ export default function App() {
         studentName: student?.name || existingPayment?.studentName || "Pa student",
         teacherId: student?.teacherId ?? null,
         teacherName: teacher?.name || existingPayment?.teacherName || "Pa mësues",
+        teacherPercent: existingPayment?.teacherPercent ?? 80,
+        adminPercent: existingPayment?.adminPercent ?? 15,
+        schoolPercent: existingPayment?.schoolPercent ?? 5,
+        paymentType: editingPaymentType,
+        hours: isHourly ? editingPaymentHours : "",
+        rate: isHourly ? parseMoney(editingPaymentRate) : "",
         note: editingPaymentNote.trim(),
         date: `${editingPaymentDate}T00:00:00.000Z`,
       };
@@ -1288,9 +1385,42 @@ export default function App() {
       setEditingPaymentStudentId("");
       setEditingPaymentDate("");
       setEditingPaymentNote("");
+      setEditingPaymentHours("");
+      setEditingPaymentRate("");
+      setEditingPaymentType("fixed");
     } catch (error) {
       reportDataError(error);
     }
+  };
+
+  const changeEditingPaymentHours = (hours) => {
+    setEditingPaymentHours(hours);
+    const amount = hourlyPaymentAmount(hours, editingPaymentRate);
+    setEditingPaymentAmount(amount ? String(amount) : "");
+  };
+
+  const changeEditingPaymentRate = (rate) => {
+    setEditingPaymentRate(rate);
+    const amount = hourlyPaymentAmount(editingPaymentHours, rate);
+    setEditingPaymentAmount(amount ? String(amount) : "");
+  };
+
+  const changeEditingPaymentStudent = (studentId) => {
+    setEditingPaymentStudentId(studentId);
+    const student = students.find((s) => sameId(s.id, studentId));
+    const course = student ? getStudentCourse(student) : null;
+    const price = student ? getStudentCoursePrice(student) : 0;
+    if (isHourlyCourse(course)) {
+      setEditingPaymentType("hourly");
+      setEditingPaymentHours("");
+      setEditingPaymentRate(price ? String(price) : "10");
+      setEditingPaymentAmount("");
+      return;
+    }
+    setEditingPaymentType("fixed");
+    setEditingPaymentHours("");
+    setEditingPaymentRate("");
+    setEditingPaymentAmount(price ? String(price) : "");
   };
 
   const currentPaymentMonth = monthFromDate(new Date().toISOString());
@@ -1332,6 +1462,11 @@ export default function App() {
       return;
     }
 
+    if (isHourlyCourse(course)) {
+      window.alert("Ky nxenes eshte individual. Shto pagesen nga tab Pagesat dhe shkruaj oret.");
+      return;
+    }
+
     const teacher = teachers.find((t) => sameId(t.id, student.teacherId));
     const nextPayment = {
       studentId: student.id,
@@ -1342,6 +1477,9 @@ export default function App() {
       teacherPercent: 80,
       adminPercent: 15,
       schoolPercent: 5,
+      paymentType: "fixed",
+      hours: "",
+      rate: "",
       note: "",
       date: new Date().toISOString(),
     };
@@ -1406,6 +1544,8 @@ export default function App() {
       : payment.studentName.toLowerCase().includes(q) ||
         payment.teacherName.toLowerCase().includes(q) ||
         String(payment.amount).includes(q) ||
+        String(payment.hours || "").includes(q) ||
+        String(payment.rate || "").includes(q) ||
         String(payment.note || "").toLowerCase().includes(q) ||
         payment.month.includes(q) ||
         formatDateDisplay(payment.date).includes(q);
@@ -1415,13 +1555,13 @@ export default function App() {
   });
 
   const filteredExpenses = expenses.filter((expense) => {
-    const matchesMonth = !expenseMonthFilter ? true : monthFromDate(expense.date) === expenseMonthFilter;
+    const matchesMonth = !financeOverviewMonth ? true : monthFromDate(expense.date) === financeOverviewMonth;
     return matchesMonth;
   });
 
   const filteredCourses = courses.filter((course) => {
     const q = courseSearch.trim().toLowerCase();
-    return !q || course.name.toLowerCase().includes(q) || String(course.price).includes(q);
+    return !q || course.name.toLowerCase().includes(q) || String(course.price).includes(q) || pricingTypeLabel(course.pricingType).toLowerCase().includes(q);
   });
 
   const teacherEarnings = useMemo(() => {
@@ -1532,7 +1672,19 @@ export default function App() {
 
   const filteredArchiveCourses = (archive.courses || []).filter((course) => {
     const q = archiveSearch.trim().toLowerCase();
-    return !q || course.name.toLowerCase().includes(q) || String(course.price).includes(q);
+    return !q || course.name.toLowerCase().includes(q) || String(course.price).includes(q) || pricingTypeLabel(course.pricingType).toLowerCase().includes(q);
+  });
+
+  const filteredArchiveExpenses = (archive.expenses || []).filter((expense) => {
+    const q = archiveSearch.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      (expense.name || "").toLowerCase().includes(q) ||
+      String(expense.amount).includes(q) ||
+      String(expense.note || "").toLowerCase().includes(q) ||
+      monthFromDate(expense.date).includes(q) ||
+      formatDateDisplay(expense.date).includes(q)
+    );
   });
 
   const sortedStudents = sortRows(filteredStudentsByGroup, "students", {
@@ -1587,6 +1739,35 @@ export default function App() {
     remainingShare: (teacher) => teacher.remainingShare,
   });
 
+  const selectedPagaTeacher = teachers.find((teacher) => sameId(teacher.id, selectedPagaTeacherView));
+  const selectedPagaPaidStudents = useMemo(() => {
+    if (!selectedPagaTeacherView) return [];
+
+    const rowsByStudent = new Map();
+    payments.forEach((payment) => {
+      const student = students.find((item) => sameId(item.id, payment.studentId));
+      const teacherId = payment.teacherId ?? student?.teacherId;
+      if (!sameId(teacherId, selectedPagaTeacherView)) return;
+      if (financeMonth && monthFromDate(payment.date) !== financeMonth) return;
+
+      const key = payment.studentId || payment.studentName || payment.id;
+      const existingRow = rowsByStudent.get(key);
+      const nameParts = String(payment.studentName || student?.name || "").split(" ").filter(Boolean);
+      rowsByStudent.set(key, {
+        id: key,
+        firstName: student?.firstName || nameParts[0] || payment.studentName || "Pa student",
+        lastName: student?.lastName || nameParts.slice(1).join(" "),
+        course: student?.course || "-",
+        amount: Number(existingRow?.amount || 0) + Number(payment.amount || 0),
+      });
+    });
+
+    return Array.from(rowsByStudent.values()).sort((a, b) => {
+      const firstNameSort = a.firstName.localeCompare(b.firstName, undefined, { sensitivity: "base" });
+      return firstNameSort || a.lastName.localeCompare(b.lastName, undefined, { sensitivity: "base" });
+    });
+  }, [financeMonth, payments, selectedPagaTeacherView, students]);
+
   const financePaymentRows = payments
     .map((payment) => {
       const student = students.find((item) => sameId(item.id, payment.studentId));
@@ -1636,12 +1817,14 @@ export default function App() {
   const sortedCourses = sortRows(filteredCourses, "courses", {
     nr: (_course, index) => index + 1,
     name: (course) => course.name,
+    pricingType: (course) => pricingTypeLabel(course.pricingType),
     price: (course) => course.price,
   });
 
   const sortedArchiveCourses = sortRows(filteredArchiveCourses, "courses", {
     nr: (_course, index) => index + 1,
     name: (course) => course.name,
+    pricingType: (course) => pricingTypeLabel(course.pricingType),
     price: (course) => course.price,
   });
 
@@ -1660,6 +1843,13 @@ export default function App() {
     nr: (_payment, index) => index + 1,
     name: (payment) => payment.studentName || "Pa student",
     teacherName: (payment) => payment.teacherName || "Pa mesues",
+  });
+
+  const sortedArchiveExpenses = sortRows(filteredArchiveExpenses, "archiveExpenses", {
+    nr: (_expense, index) => index + 1,
+    name: (expense) => expense.name,
+    date: (expense) => new Date(expense.date).getTime(),
+    amount: (expense) => expense.amount,
   });
 
   const toggleArchiveSelection = (type, id) => {
@@ -1701,6 +1891,12 @@ export default function App() {
         const items = (archive.courses || []).filter((item) => ids.includes(item.id)).map((item) => ({ ...item, archivedAt: null }));
         setCourses((prev) => [...prev, ...items]);
         setArchive((prev) => ({ ...prev, courses: (prev.courses || []).filter((item) => !ids.includes(item.id)) }));
+      }
+
+      if (type === "expenses") {
+        const items = (archive.expenses || []).filter((item) => ids.includes(item.id)).map((item) => ({ ...item, archivedAt: null }));
+        setExpenses((prev) => [...prev, ...items]);
+        setArchive((prev) => ({ ...prev, expenses: (prev.expenses || []).filter((item) => !ids.includes(item.id)) }));
       }
 
       setArchiveSelection((prev) => ({ ...prev, [type]: [] }));
@@ -1869,7 +2065,7 @@ export default function App() {
     const blob = new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
-    const suffix = expenseMonthFilter || "te_gjitha";
+    const suffix = financeOverviewMonth || "te_gjitha";
     link.href = url;
     link.download = `shpenzime_${suffix}.xls`;
     link.click();
@@ -1878,7 +2074,7 @@ export default function App() {
 
   const exportExpensesPdf = () => {
     const doc = new jsPDF({ orientation: "landscape" });
-    const title = expenseMonthFilter ? `Shpenzime - ${expenseMonthFilter}` : "Shpenzime - Te gjitha";
+    const title = financeOverviewMonth ? `Shpenzime - ${formatMonthYear(financeOverviewMonth)}` : "Shpenzime - Te gjitha";
     doc.setFontSize(14);
     doc.text(title, 14, 15);
     autoTable(doc, {
@@ -1895,9 +2091,213 @@ export default function App() {
         expense.note || "",
       ]),
     });
-    const suffix = expenseMonthFilter || "te_gjitha";
+    const suffix = financeOverviewMonth || "te_gjitha";
     doc.save(`shpenzime_${suffix}.pdf`);
   };
+
+  const exportAllData = () => {
+    const workbook = XLSX.utils.book_new();
+    const teacherById = (id) => teachers.find((teacher) => sameId(teacher.id, id));
+    const studentById = (id) => students.find((student) => sameId(student.id, id));
+    const paymentTeacher = (payment) => {
+      const fallbackStudent = studentById(payment.studentId);
+      return teacherById(payment.teacherId ?? fallbackStudent?.teacherId);
+    };
+    const allTimeTeacherRows = teachers.map((teacher, index) => {
+      const teacherPayments = payments.filter((payment) => sameId(paymentTeacher(payment)?.id, teacher.id));
+      const total = teacherPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+      const teacherShare = teacherPayments.reduce(
+        (sum, payment) => sum + Number(payment.amount || 0) * (paymentTeacherPercentValue(payment, teacher) / 100),
+        0
+      );
+      const adminShare = teacherPayments.reduce(
+        (sum, payment) => sum + Number(payment.amount || 0) * (paymentAdminPercentValue(payment) / 100),
+        0
+      );
+      const schoolShare = teacherPayments.reduce(
+        (sum, payment) => sum + Number(payment.amount || 0) * (paymentSchoolPercentValue(payment) / 100),
+        0
+      );
+
+      return [
+        index + 1,
+        teacher.firstName || teacher.name,
+        teacher.lastName || "",
+        `${teacher.percent}%`,
+        students.filter((student) => sameId(student.teacherId, teacher.id)).length,
+        formatExportCurrency(total),
+        formatExportCurrency(teacherShare),
+        formatExportCurrency(adminShare),
+        formatExportCurrency(schoolShare),
+        formatExportCurrency(total - teacherShare - adminShare - schoolShare),
+      ];
+    });
+    const totalExpenses = expenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
+
+    const sheets = [
+      {
+        name: "Nxenesit",
+        rows: [
+          ["Nr", "Emri", "Mbiemri", "Mosha", "Qyteti", "Telefoni", "Emaili", "Kursi", "Grupi", "Mesuesi", "Pagesa"],
+          ...students.map((student, index) => {
+            const teacher = teacherById(student.teacherId);
+            return [
+              index + 1,
+              student.firstName || student.name,
+              student.lastName || "",
+              student.age || "",
+              student.city || "",
+              student.phone || "",
+              student.email || "",
+              student.course || "",
+              formatMonthYear(student.group),
+              teacher?.name || "Pa mesues",
+              hasStudentCurrentPayment(student) ? "E paguar" : "Pa paguar",
+            ];
+          }),
+        ],
+      },
+      {
+        name: "Mesuesit",
+        rows: [
+          ["Nr", "Emri", "Mbiemri", "Perqindja", "Nxenes"],
+          ...teachers.map((teacher, index) => [
+            index + 1,
+            teacher.firstName || teacher.name,
+            teacher.lastName || "",
+            `${teacher.percent}%`,
+            students.filter((student) => sameId(student.teacherId, teacher.id)).length,
+          ]),
+        ],
+      },
+      {
+        name: "Pagesat",
+        rows: [
+          ["Nr", "Nxenesi", "Mesuesi", "Shuma", "Orët", "Çmimi/orë", "Data", "Mesuesi %", "Administrata %", "Shkolla %", "Shenime"],
+          ...payments.map((payment, index) => [
+            index + 1,
+            payment.studentName || studentById(payment.studentId)?.name || "Pa student",
+            payment.teacherName || paymentTeacher(payment)?.name || "Pa mesues",
+            formatExportCurrency(payment.amount),
+            payment.paymentType === "hourly" ? payment.hours || "" : "",
+            payment.paymentType === "hourly" ? formatExportCurrency(payment.rate) : "",
+            formatDateDisplay(payment.date),
+            `${paymentTeacherPercentValue(payment, paymentTeacher(payment))}%`,
+            `${paymentAdminPercentValue(payment)}%`,
+            `${paymentSchoolPercentValue(payment)}%`,
+            payment.note || "",
+          ]),
+        ],
+      },
+      {
+        name: "Paga",
+        rows: [
+          ["Nr", "Emri", "Mbiemri", "%", "Nxenes", "Total", "Mesuesi", "Administrata", "Shkolla", "Mbetja"],
+          ...allTimeTeacherRows,
+        ],
+      },
+      {
+        name: "Financa",
+        rows: [
+          ["Kategoria", "Totali"],
+          ["Te gjitha te hyrat", formatExportCurrency(allTimeIncomeOverview.totalIncome)],
+          ["Paga mesuesve", formatExportCurrency(allTimeTeacherRows.reduce((sum, row) => sum + parseMoney(row[6]), 0))],
+          ["Administrata", formatExportCurrency(allTimeIncomeOverview.totalAdminShare)],
+          ["Shkolla", formatExportCurrency(allTimeIncomeOverview.totalSchoolShare)],
+          ["Shpenzime", formatExportCurrency(totalExpenses)],
+          ["Te mbetura", formatExportCurrency(allTimeIncomeOverview.totalSchoolShare - totalExpenses)],
+          [],
+          ["Nr", "Produkti / Shpenzimi", "Data", "Cmimi", "Shenime"],
+          ...expenses.map((expense, index) => [
+            index + 1,
+            expense.name,
+            formatDateDisplay(expense.date),
+            formatExportCurrency(expense.amount),
+            expense.note || "",
+          ]),
+        ],
+      },
+      {
+        name: "Kurset",
+        rows: [
+          ["Nr", "Emri i kursit", "Lloji", "Cmimi"],
+          ...courses.map((course, index) => [index + 1, course.name, pricingTypeLabel(course.pricingType), formatExportCurrency(course.price)]),
+        ],
+      },
+      {
+        name: "Archive Nxenes",
+        rows: [
+          ["Nr", "Emri", "Mbiemri", "Kursi", "Grupi", "Mesuesi"],
+          ...archive.students.map((student, index) => [
+            index + 1,
+            student.firstName || student.name,
+            student.lastName || "",
+            student.course || "",
+            formatMonthYear(student.group),
+            teacherById(student.teacherId)?.name || "Pa mesues",
+          ]),
+        ],
+      },
+      {
+        name: "Archive Mesues",
+        rows: [
+          ["Nr", "Emri", "Mbiemri", "Perqindja"],
+          ...archive.teachers.map((teacher, index) => [
+            index + 1,
+            teacher.firstName || teacher.name,
+            teacher.lastName || "",
+            `${teacher.percent}%`,
+          ]),
+        ],
+      },
+      {
+        name: "Archive Pagesa",
+        rows: [
+          ["Nr", "Nxenesi", "Mesuesi", "Shuma", "Orët", "Çmimi/orë", "Data", "Shenime"],
+          ...archive.payments.map((payment, index) => [
+            index + 1,
+            payment.studentName || "Pa student",
+            payment.teacherName || "Pa mesues",
+            formatExportCurrency(payment.amount),
+            payment.paymentType === "hourly" ? payment.hours || "" : "",
+            payment.paymentType === "hourly" ? formatExportCurrency(payment.rate) : "",
+            formatDateDisplay(payment.date),
+            payment.note || "",
+          ]),
+        ],
+      },
+      {
+        name: "Archive Kurse",
+        rows: [
+          ["Nr", "Emri i kursit", "Lloji", "Cmimi"],
+          ...(archive.courses || []).map((course, index) => [index + 1, course.name, pricingTypeLabel(course.pricingType), formatExportCurrency(course.price)]),
+        ],
+      },
+      {
+        name: "Archive Shpenzime",
+        rows: [
+          ["Nr", "Produkti / Shpenzimi", "Data", "Cmimi", "Shenime"],
+          ...(archive.expenses || []).map((expense, index) => [
+            index + 1,
+            expense.name,
+            formatDateDisplay(expense.date),
+            formatExportCurrency(expense.amount),
+            expense.note || "",
+          ]),
+        ],
+      },
+    ];
+
+    sheets.forEach((sheet) => {
+      XLSX.utils.book_append_sheet(workbook, sheetFromRows(sheet.rows), sheet.name);
+    });
+    XLSX.writeFile(workbook, `vatra_export_${currentDateInput()}.xlsx`);
+  };
+
+  const selectedPaymentStudentDetails = students.find((student) => sameId(student.id, selectedStudent));
+  const selectedPaymentCourseDetails = selectedPaymentStudentDetails ? getStudentCourse(selectedPaymentStudentDetails) : null;
+  const isSelectedPaymentHourly = isHourlyCourse(selectedPaymentCourseDetails);
+  const isEditingPaymentHourly = editingPaymentType === "hourly";
 
   const navItems = [
     { key: "students", label: "Nxënësit" },
@@ -1906,7 +2306,7 @@ export default function App() {
     { key: "paga", label: "Paga" },
     { key: "finance", label: "Financa" },
     { key: "courses", label: "Kurset" },
-    { key: "archive", label: "Archive" },
+    { key: "archive", label: "Arkiva" },
   ];
 
   if (isAuthLoading) {
@@ -1964,19 +2364,31 @@ export default function App() {
   }
 
   return (
-    <div className={`${shell} h-dvh min-h-screen overflow-hidden flex flex-col lg:flex-row`} style={{ background: HIGHLIGHT }}>
-      <aside className={`relative w-full ${isSidebarCollapsed ? "lg:w-20" : "lg:w-64"} lg:h-full shrink-0 overflow-hidden border-b lg:border-b-0 lg:border-r ${sidebar} p-3 sm:p-4 flex flex-col sticky top-0 z-40 transition-all duration-200`} style={{ background: PRIMARY }}>
-        <div className="flex-1">
-          <div className={`flex items-center justify-center gap-3 mb-3 lg:mb-6 ${isSidebarCollapsed ? "lg:justify-center" : "lg:justify-start"}`}>
+    <div className={`${shell} h-dvh min-h-0 overflow-hidden flex flex-col lg:flex-row`} style={{ background: HIGHLIGHT }}>
+      <button
+        type="button"
+        onClick={() => setIsMobileSidebarOpen(true)}
+        className="fixed left-3 top-3 z-50 flex h-11 w-11 items-center justify-center rounded-lg bg-white shadow-md lg:hidden"
+        aria-label="Hap sidebar"
+        title="Hap sidebar"
+      >
+        <img src={sidebarIcon} alt="" className="h-5 w-5" />
+      </button>
+      {isMobileSidebarOpen && (
+        <div className="fixed inset-0 z-40 bg-black/40 lg:hidden" onClick={() => setIsMobileSidebarOpen(false)} />
+      )}
+      <aside className={`app-sidebar fixed inset-y-0 left-0 z-50 flex min-h-screen w-72 max-w-[82vw] shrink-0 flex-col overflow-hidden border-r ${sidebar} p-3 sm:p-4 lg:static lg:h-full lg:min-h-0 lg:max-w-none lg:p-3 lg:translate-x-0 transition-transform duration-200 ${isSidebarCollapsed ? "lg:w-20" : "lg:w-64"} ${isMobileSidebarOpen ? "translate-x-0" : "-translate-x-full"}`} style={{ background: PRIMARY }}>
+        <div className="flex-1 min-h-0">
+          <div className={`sidebar-brand flex items-center justify-center gap-3 mb-3 lg:mb-4 ${isSidebarCollapsed ? "lg:justify-center" : "lg:justify-start"}`}>
             <BrandMark />
-            <div className={`text-base sm:text-lg font-bold leading-tight text-white ${isSidebarCollapsed ? "lg:hidden" : ""}`}>
+            <div className={`sidebar-brand-title text-base sm:text-lg font-bold leading-tight text-white ${isSidebarCollapsed ? "lg:hidden" : ""}`}>
               Vatra e Dituris&euml;
             </div>
           </div>
           <button
             type="button"
             onClick={() => setIsSidebarCollapsed((prev) => !prev)}
-            className="mb-3 hidden h-10 w-full items-center justify-start rounded-lg px-3 transition hover:bg-white/10 lg:flex"
+            className={`sidebar-collapse-button mb-2 hidden h-9 w-full items-center rounded-lg transition hover:bg-white/10 lg:flex ${isSidebarCollapsed ? "lg:justify-center lg:px-0" : "lg:justify-start lg:px-3"}`}
             aria-label={isSidebarCollapsed ? "Hap sidebar" : "Mbyll sidebar"}
             title={isSidebarCollapsed ? "Hap sidebar" : "Mbyll sidebar"}
           >
@@ -1986,12 +2398,15 @@ export default function App() {
               className="h-5 w-5"
             />
           </button>
-          <div className={`${isSidebarCollapsed ? "hidden lg:block" : "flex"} flex-wrap justify-center gap-2 lg:block lg:space-y-2`}>
+          <div className="sidebar-nav space-y-2 lg:space-y-1.5">
             {navItems.map((item) => (
               <button
                 key={item.key}
-                onClick={() => setActiveView(item.key)}
-                className={`w-[calc(50%-0.25rem)] px-3 py-2 rounded-lg text-center text-sm transition hover:bg-white/10 sm:w-[calc(33.333%-0.34rem)] sm:text-base lg:w-full ${isSidebarCollapsed ? "lg:text-center" : "lg:text-left"}`}
+                onClick={() => {
+                  setActiveView(item.key);
+                  setIsMobileSidebarOpen(false);
+                }}
+                className={`sidebar-nav-button w-full px-3 py-2 lg:py-1.5 rounded-lg text-left text-sm transition hover:bg-white/10 sm:text-base ${isSidebarCollapsed ? "lg:text-center" : "lg:text-left"}`}
                 style={activeView === item.key ? activeNavStyle : inactiveNavStyle}
                 title={item.label}
               >
@@ -2000,33 +2415,19 @@ export default function App() {
               </button>
             ))}
           </div>
-          <button
-            type="button"
-            onClick={() => setIsSidebarCollapsed((prev) => !prev)}
-            className="mt-3 flex h-10 w-full items-center justify-center rounded-lg transition hover:bg-white/10 lg:hidden"
-            aria-label={isSidebarCollapsed ? "Hap sidebar" : "Mbyll sidebar"}
-            title={isSidebarCollapsed ? "Hap sidebar" : "Mbyll sidebar"}
-          >
-            <img
-              src={sidebarIcon}
-              alt=""
-              className="h-5 w-5"
-            />
-          </button>
         </div>
         <button
           type="button"
           onClick={() => setIsSettingsModalOpen(true)}
-          className={`mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium text-white transition hover:bg-white/10 ${isSidebarCollapsed ? "lg:justify-center" : "lg:justify-start"}`}
+          className="sidebar-settings-button mt-2 flex h-11 w-full shrink-0 items-center justify-start gap-3 rounded-lg px-3 text-base font-semibold text-white transition hover:bg-white/10"
           aria-label="Settings"
           title="Settings"
         >
-          <img src={settingsIcon} alt="" className="h-5 w-5" />
-          <span className={isSidebarCollapsed ? "lg:hidden" : ""}>Settings</span>
+          <img src={settingsIcon} alt="" className="h-6 w-6 shrink-0" />
         </button>
       </aside>
 
-      <main className="flex-1 min-h-0 p-3 sm:p-4 lg:p-6 space-y-4 lg:space-y-6 overflow-auto">
+      <main className="flex-1 min-h-0 p-3 pt-16 sm:p-4 sm:pt-16 lg:p-6 lg:pt-6 space-y-4 lg:space-y-6 overflow-auto">
         {isDataLoading && (
           <div className="fixed right-4 top-4 z-50 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-500 shadow-sm">
             Loading Supabase data...
@@ -2306,13 +2707,15 @@ export default function App() {
             </div>
 
             <div className={tableWrap}>
-              <table className="min-w-[52rem] w-full text-sm">
+              <table className="min-w-[64rem] w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-200">
                     <th className={thClass}>Nr</th>
                     <th className={thClass}>{sortButton("payments", "studentName", "Nxënësi")}</th>
                     <th className={thClass}>{sortButton("payments", "teacherName", "Mësuesi")}</th>
                     <th className={thClass}>{sortButton("payments", "amount", "Shuma")}</th>
+                    <th className={thClass}>Orët</th>
+                    <th className={thClass}>€/orë</th>
                     <th className={thClass}>{sortButton("payments", "date", "Data")}</th>
                     <th className={thClass}>{sortButton("payments", "note", "Shenime")}</th>
                     <th className={thClass}>Veprime</th>
@@ -2325,7 +2728,7 @@ export default function App() {
                       <tr key={payment.id} className={rowHover}>
                         <td className={tdClass}>{index + 1}</td>
                         <td className={tdClass}>{isEditing ? (
-                          <select className={input} value={editingPaymentStudentId} onChange={(e) => setEditingPaymentStudentId(e.target.value)}>
+                          <select className={input} value={editingPaymentStudentId} onChange={(e) => changeEditingPaymentStudent(e.target.value)}>
                             <option value="">Zgjedh nxënësin</option>
                             {students.map((student) => (
                               <option key={student.id} value={student.id}>{student.name}</option>
@@ -2336,6 +2739,12 @@ export default function App() {
                         <td className={tdClass}>{isEditing ? (
                           <input className={input} value={editingPaymentAmount} onChange={(e) => setEditingPaymentAmount(e.target.value)} type="number" min="0" step="0.01" />
                         ) : formatCurrency(payment.amount)}</td>
+                        <td className={tdClass}>{isEditing && isEditingPaymentHourly ? (
+                          <input className={input} value={editingPaymentHours} onChange={(e) => changeEditingPaymentHours(e.target.value)} type="number" min="0" step="0.25" />
+                        ) : (payment.paymentType === "hourly" ? payment.hours || "-" : "-")}</td>
+                        <td className={tdClass}>{isEditing && isEditingPaymentHourly ? (
+                          <input className={input} value={editingPaymentRate} onChange={(e) => changeEditingPaymentRate(e.target.value)} type="number" min="0" step="0.01" />
+                        ) : (payment.paymentType === "hourly" ? formatCurrency(payment.rate) : "-")}</td>
                         <td className={tdClass}>{isEditing ? (
                           <input className={dateInput} value={editingPaymentDate} onChange={(e) => setEditingPaymentDate(e.target.value)} type="date" />
                         ) : formatDateDisplay(payment.date)}</td>
@@ -2345,7 +2754,7 @@ export default function App() {
                             {isEditing ? (
                               <>
                                 <button onClick={saveEditPayment} className={smallBtn} style={primaryBtnStyle}>Save</button>
-                                <button onClick={() => { setEditingPaymentId(null); setEditingPaymentDate(""); setEditingPaymentNote(""); }} className={smallBtn} style={secondaryBtnStyle}>Cancel</button>
+                                <button onClick={() => { setEditingPaymentId(null); setEditingPaymentDate(""); setEditingPaymentNote(""); setEditingPaymentHours(""); setEditingPaymentRate(""); setEditingPaymentType("fixed"); }} className={smallBtn} style={secondaryBtnStyle}>Cancel</button>
                               </>
                             ) : (
                               <>
@@ -2400,22 +2809,65 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedTeacherEarnings.map((teacher, index) => (
-                    <tr key={teacher.id} className={rowHover}>
-                      <td className={tdClass}>{index + 1}</td>
-                      <td className={tdClass}>{teacher.name}</td>
-                      <td className={tdClass}>{teacher.percent}%</td>
-                      <td className={tdClass}>{teacher.studentsCount}</td>
-                      <td className={tdClass}>{formatCurrency(teacher.total)}</td>
-                      <td className={tdClass}>{formatCurrency(teacher.teacherShare)}</td>
-                      <td className={tdClass}>{formatCurrency(teacher.adminShare)}</td>
-                      <td className={tdClass}>{formatCurrency(teacher.schoolShare)}</td>
-                      <td className={tdClass}>{formatCurrency(teacher.remainingShare)}</td>
-                    </tr>
-                  ))}
+                  {sortedTeacherEarnings.map((teacher, index) => {
+                    const isSelected = sameId(selectedPagaTeacherView, teacher.id);
+                    return (
+                      <tr
+                        key={teacher.id}
+                        onClick={() => setSelectedPagaTeacherView((prev) => (sameId(prev, teacher.id) ? null : teacher.id))}
+                        className={`${rowHover} cursor-pointer ${isSelected ? selectedRow : ""}`}
+                      >
+                        <td className={tdClass}>{index + 1}</td>
+                        <td className={tdClass}>{teacher.name}</td>
+                        <td className={tdClass}>{teacher.percent}%</td>
+                        <td className={tdClass}>{teacher.studentsCount}</td>
+                        <td className={tdClass}>{formatCurrency(teacher.total)}</td>
+                        <td className={tdClass}>{formatCurrency(teacher.teacherShare)}</td>
+                        <td className={tdClass}>{formatCurrency(teacher.adminShare)}</td>
+                        <td className={tdClass}>{formatCurrency(teacher.schoolShare)}</td>
+                        <td className={tdClass}>{formatCurrency(teacher.remainingShare)}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
+
+            {selectedPagaTeacherView && (
+              <div className="mt-6 border rounded-lg lg:rounded-2xl p-3 sm:p-4 bg-gray-50 border-gray-200">
+                <h3 className="text-lg font-bold mb-3" style={{ color: PRIMARY }}>
+                  Nxënësit që kanë paguar {selectedPagaTeacher ? `- ${selectedPagaTeacher.name}` : ""}
+                </h3>
+                <div className={tableWrap}>
+                  <table className="min-w-[42rem] w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-200">
+                        <th className={thClass}>Nr</th>
+                        <th className={thClass}>Emri</th>
+                        <th className={thClass}>Mbiemri</th>
+                        <th className={thClass}>Kursi</th>
+                        <th className={thClass}>Pagesa</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedPagaPaidStudents.length > 0 ? (
+                        selectedPagaPaidStudents.map((student, index) => (
+                          <tr key={student.id} className={rowHover}>
+                            <td className={tdClass}>{index + 1}</td>
+                            <td className={tdClass}>{student.firstName}</td>
+                            <td className={tdClass}>{student.lastName || "-"}</td>
+                            <td className={tdClass}>{student.course || "-"}</td>
+                            <td className={tdClass}>{formatCurrency(student.amount)}</td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr><td className={tdClass} colSpan={5}>Ky mësues nuk ka nxënës me pagesë për këtë muaj.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
 
             <div className="mt-6 flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm">
               <span className="font-semibold" style={{ color: PRIMARY }}>Administrata</span>
@@ -2452,7 +2904,7 @@ export default function App() {
                 <div className="text-xl font-bold">{formatCurrency(overviewExpenses)}</div>
               </div>
               <div className="p-4 rounded-xl border">
-                <div className="text-gray-500 text-sm">Fitimi</div>
+                <div className="text-gray-500 text-sm">Te mbetura</div>
                 <div className="text-xl font-bold">
                   {formatCurrency(
                     overviewProfit
@@ -2468,15 +2920,9 @@ export default function App() {
               <button className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg px-4 py-2 font-medium text-white sm:w-64" style={secondaryBtnStyle} onClick={openExpenseModal}>{actionLabel("add", "Shto shpenzim")}</button>
             </div>
 
-            <div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full md:w-[26rem]">
-                <input className={dateInput} type="month" value={expenseMonthFilter} onChange={(e) => setExpenseMonthFilter(e.target.value)} />
-                <button onClick={() => setExpenseMonthFilter("")} className={mainBtn} style={secondaryBtnStyle}>{actionLabel("clear", "Pastro filtrin")}</button>
-              </div>
-              <div className="flex flex-col sm:flex-row gap-2">
-                <button onClick={exportExpensesExcel} className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg px-4 py-2 font-medium text-white sm:w-64" style={secondaryBtnStyle}>{actionLabel("export", "Excel shpenzimet")}</button>
-                <button onClick={exportExpensesPdf} className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg px-4 py-2 font-medium text-white sm:w-64" style={primaryBtnStyle}>{actionLabel("export", "PDF shpenzimet")}</button>
-              </div>
+            <div className="flex flex-col sm:flex-row justify-end gap-2">
+              <button onClick={exportExpensesExcel} className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg px-4 py-2 font-medium text-white sm:w-64" style={secondaryBtnStyle}>{actionLabel("export", "Excel shpenzimet")}</button>
+              <button onClick={exportExpensesPdf} className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg px-4 py-2 font-medium text-white sm:w-64" style={primaryBtnStyle}>{actionLabel("export", "PDF shpenzimet")}</button>
             </div>
 
             <div className={tableWrap}>
@@ -2511,6 +2957,7 @@ export default function App() {
                             ) : (
                               <>
                                 <button onClick={() => startEditExpense(expense)} className={smallBtn} style={secondaryBtnStyle}>{actionLabel("edit", "Edit")}</button>
+                                <button onClick={() => archiveExpense(expense)} className={smallBtn} style={warningBtnStyle}>{actionLabel("archive", "Archive")}</button>
                               </>
                             )}
                           </div>
@@ -2545,11 +2992,12 @@ export default function App() {
             </div>
 
             <div className={tableWrap}>
-              <table className="min-w-[36rem] w-full text-sm">
+              <table className="min-w-[44rem] w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-200">
                     <th className={thClass}>Nr</th>
                     <th className={thClass}>{sortButton("courses", "name", "Emri i kursit")}</th>
+                    <th className={thClass}>{sortButton("courses", "pricingType", "Lloji")}</th>
                     <th className={thClass}>{sortButton("courses", "price", "Çmimi")}</th>
                     <th className={thClass}>Veprime</th>
                   </tr>
@@ -2561,6 +3009,12 @@ export default function App() {
                       <tr key={course.id} className={rowHover}>
                         <td className={tdClass}>{index + 1}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingCourseName} onChange={(e) => setEditingCourseName(e.target.value)} /> : course.name}</td>
+                        <td className={tdClass}>{isEditing ? (
+                          <select className={input} value={editingCoursePricingType} onChange={(e) => setEditingCoursePricingType(e.target.value)}>
+                            <option value="fixed">Mujore</option>
+                            <option value="hourly">Me orë</option>
+                          </select>
+                        ) : pricingTypeLabel(course.pricingType)}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingCoursePrice} onChange={(e) => setEditingCoursePrice(e.target.value)} type="number" min="0" step="0.01" /> : formatCurrency(course.price)}</td>
                         <td className={tdClass}>
                           <div className="flex flex-wrap gap-2">
@@ -2590,7 +3044,7 @@ export default function App() {
           <div className={`border rounded-lg lg:rounded-2xl shadow-sm ${card} p-3 sm:p-4 space-y-4 lg:space-y-6`}>
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
               <div>
-                <h2 className="text-2xl font-bold" style={{ color: PRIMARY }}>Archive</h2>
+                <h2 className="text-2xl font-bold" style={{ color: PRIMARY }}>Arkiva</h2>
                 <p className="text-gray-500">Këtu ruhen të dhënat e arkivuara dhe mund t’i kthesh prapë aktive.</p>
               </div>
               <div className="w-full lg:w-80">
@@ -2728,6 +3182,49 @@ export default function App() {
 
             <div>
               <div className="flex items-center justify-between mb-3">
+                <h3 className="text-lg font-bold" style={{ color: PRIMARY }}>Shpenzime</h3>
+                <div className="flex gap-2">
+                  <button onClick={() => bulkRestore("expenses")} disabled={!(archiveSelection.expenses || []).length} className={smallBtn} style={(archiveSelection.expenses || []).length ? primaryBtnStyle : disabledPrimaryBtnStyle}>{actionLabel("restore", "Restore Selected")}</button>
+                  <button onClick={() => bulkDeleteArchived("expenses")} disabled={!(archiveSelection.expenses || []).length} className={smallBtn} style={(archiveSelection.expenses || []).length ? dangerBtnStyle : { background: "#d1d5db", color: "#6b7280", cursor: "not-allowed" }}>{actionLabel("delete", "Delete Selected")}</button>
+                </div>
+              </div>
+              <div className={tableWrap}>
+                <table className="min-w-[44rem] w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-200">
+                      <th className={thClass}>Nr</th>
+                      <th className={thClass}>#</th>
+                      <th className={thClass}>{sortButton("archiveExpenses", "name", "Produkti")}</th>
+                      <th className={thClass}>{sortButton("archiveExpenses", "date", "Data")}</th>
+                      <th className={thClass}>{sortButton("archiveExpenses", "amount", "Çmimi")}</th>
+                      <th className={thClass}>Shenime</th>
+                      <th className={thClass}>Veprimi</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sortedArchiveExpenses.map((expense, index) => (
+                      <tr key={expense.id} className={rowHover}>
+                        <td className={tdClass}>{index + 1}</td>
+                        <td className={tdClass}><input type="checkbox" className={roundCheckbox} checked={(archiveSelection.expenses || []).includes(expense.id)} onChange={() => toggleArchiveSelection("expenses", expense.id)} /></td>
+                        <td className={tdClass}>{expense.name}</td>
+                        <td className={tdClass}>{formatDateDisplay(expense.date)}</td>
+                        <td className={tdClass}>{formatCurrency(expense.amount)}</td>
+                        <td className={tdClass}>{expense.note || "-"}</td>
+                        <td className={tdClass}>
+                          <div className="flex gap-2">
+                            <button onClick={() => restoreExpense(expense)} className={smallBtn} style={primaryBtnStyle}>{actionLabel("restore", "Restore")}</button>
+                            <button onClick={() => deleteArchivedItem("expenses", expense.id)} className={smallBtn} style={dangerBtnStyle}>{actionLabel("delete", "Delete")}</button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-3">
                 <h3 className="text-lg font-bold" style={{ color: PRIMARY }}>Kurset</h3>
                 <div className="flex gap-2">
                   <button onClick={() => bulkRestore("courses")} disabled={!(archiveSelection.courses || []).length} className={smallBtn} style={(archiveSelection.courses || []).length ? primaryBtnStyle : disabledPrimaryBtnStyle}>{actionLabel("restore", "Restore Selected")}</button>
@@ -2741,6 +3238,7 @@ export default function App() {
                       <th className={thClass}>Nr</th>
                       <th className={thClass}>#</th>
                       <th className={thClass}>{sortButton("courses", "name", "Emri i kursit")}</th>
+                      <th className={thClass}>{sortButton("courses", "pricingType", "Lloji")}</th>
                       <th className={thClass}>{sortButton("courses", "price", "Çmimi")}</th>
                       <th className={thClass}>Veprimi</th>
                     </tr>
@@ -2751,6 +3249,7 @@ export default function App() {
                         <td className={tdClass}>{index + 1}</td>
                         <td className={tdClass}><input type="checkbox" className={roundCheckbox} checked={(archiveSelection.courses || []).includes(course.id)} onChange={() => toggleArchiveSelection("courses", course.id)} /></td>
                         <td className={tdClass}>{course.name}</td>
+                        <td className={tdClass}>{pricingTypeLabel(course.pricingType)}</td>
                         <td className={tdClass}>{formatCurrency(course.price)}</td>
                         <td className={tdClass}>
                           <div className="flex gap-2">
@@ -2789,6 +3288,12 @@ export default function App() {
                     <option key={student.id} value={student.id}>{student.name}</option>
                   ))}
                 </select>
+                {isSelectedPaymentHourly && (
+                  <>
+                    <input className={input} value={paymentHours} onChange={(e) => changePaymentHours(e.target.value)} placeholder="Orët" type="number" min="0" step="0.25" required />
+                    <input className={input} value={paymentRate} onChange={(e) => changePaymentRate(e.target.value)} placeholder="Çmimi për orë" type="number" min="0" step="0.01" required />
+                  </>
+                )}
                 <input className={input} value={paymentAmount} onChange={(e) => setPaymentAmount(e.target.value)} placeholder="Shuma" />
                 <input className={dateInput} type="date" value={paymentDate} onChange={(e) => setPaymentDate(e.target.value)} />
                 <div className="relative min-w-0">
@@ -3021,6 +3526,10 @@ export default function App() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <input className={input} value={courseForm.name} onChange={(e) => setCourseForm((prev) => ({ ...prev, name: e.target.value }))} placeholder="Emri i kursit" required />
+                <select className={input} value={courseForm.pricingType} onChange={(e) => setCourseForm((prev) => ({ ...prev, pricingType: e.target.value }))}>
+                  <option value="fixed">Mujore</option>
+                  <option value="hourly">Me orë</option>
+                </select>
                 <input className={input} value={courseForm.price} onChange={(e) => setCourseForm((prev) => ({ ...prev, price: e.target.value }))} placeholder="Çmimi" type="number" min="0" step="0.01" required />
               </div>
 
@@ -3096,7 +3605,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="flex flex-col gap-8">
+              <div className="flex flex-col gap-3">
                 {authError && (
                   <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
                     {authError}
@@ -3112,6 +3621,9 @@ export default function App() {
                     Sign in with Google
                   </button>
                 )}
+                <button type="button" onClick={exportAllData} className={`${mainBtn} mt-4`} style={secondaryBtnStyle}>
+                  {actionLabel("export", "Eksporto te gjitha")}
+                </button>
                 <button type="button" onClick={signOut} className={mainBtn} style={dangerBtnStyle}>
                   Sign out
                 </button>
