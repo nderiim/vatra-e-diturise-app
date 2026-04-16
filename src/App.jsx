@@ -73,6 +73,11 @@ function formatMonthYear(value) {
   return monthNames[Number(month) - 1] && year ? `${monthNames[Number(month) - 1]} ${year}` : value;
 }
 
+function monthIsOnOrBefore(date, targetMonth) {
+  const rowMonth = monthFromDate(date);
+  return !targetMonth || (rowMonth && rowMonth <= targetMonth);
+}
+
 function formatDateDisplay(date) {
   if (!date) return "-";
   const parsed = new Date(date);
@@ -102,6 +107,7 @@ const emptyStudentForm = {
   email: "",
   course: "",
   group: "",
+  studentGroup: "",
   teacherId: "",
 };
 
@@ -116,6 +122,11 @@ const emptyCourseForm = {
   price: "",
   pricingType: "fixed",
 };
+
+const pricingTypeOptions = [
+  { value: "hourly", label: "Me orë" },
+  { value: "fixed", label: "Mujore" },
+];
 
 function normalizeExcelKey(key) {
   return String(key || "")
@@ -147,6 +158,112 @@ function sheetFromRows(rows) {
 
 function sameId(a, b) {
   return String(a ?? "") === String(b ?? "");
+}
+
+function compareText(first, second) {
+  return String(first || "").localeCompare(String(second || ""), undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+}
+
+function studentOptionLabel(student) {
+  const name = student?.name || [student?.firstName, student?.lastName].filter(Boolean).join(" ") || "Pa student";
+  return student?.studentGroup ? `${name} - ${student.studentGroup}` : name;
+}
+
+function SearchableSelect({
+  value,
+  onChange,
+  options,
+  placeholder = "Zgjedh",
+  searchPlaceholder = "Kërko...",
+  className = "",
+  disabled = false,
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const rootRef = useRef(null);
+  const searchRef = useRef(null);
+  const selectedOption = options.find((option) => sameId(option.value, value));
+  const filteredOptions = options.filter((option) =>
+    String(option.label || "").toLowerCase().includes(query.trim().toLowerCase())
+  );
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+
+    const handleClickOutside = (event) => {
+      if (!rootRef.current?.contains(event.target)) setIsOpen(false);
+    };
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") setIsOpen(false);
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleKeyDown);
+    window.setTimeout(() => searchRef.current?.focus(), 0);
+
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen]);
+
+  const chooseOption = (optionValue) => {
+    onChange(optionValue);
+    setIsOpen(false);
+    setQuery("");
+  };
+
+  return (
+    <div ref={rootRef} className="relative min-w-0" onClick={(event) => event.stopPropagation()}>
+      <button
+        type="button"
+        className={`${className} flex items-center justify-between gap-2 text-left ${disabled ? "cursor-not-allowed opacity-60" : ""}`}
+        onClick={() => {
+          if (!disabled) setIsOpen((prev) => !prev);
+        }}
+        disabled={disabled}
+      >
+        <span className={`truncate ${selectedOption ? "" : "text-gray-500"}`}>
+          {selectedOption?.label || placeholder}
+        </span>
+        <span className="shrink-0 text-xs text-gray-500">▼</span>
+      </button>
+
+      {isOpen && (
+        <div className="absolute left-0 right-0 top-full z-[80] mt-1 rounded-lg border border-gray-200 bg-white p-2 shadow-xl">
+          <input
+            ref={searchRef}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-transparent focus:ring-2 focus:ring-[#54807f]"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={searchPlaceholder}
+          />
+          <div className="mt-2 max-h-56 overflow-y-auto">
+            {filteredOptions.length > 0 ? (
+              filteredOptions.map((option) => (
+                <button
+                  key={String(option.value)}
+                  type="button"
+                  className={`w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-gray-100 ${
+                    sameId(option.value, value) ? "bg-[#80a68a] text-white hover:bg-[#80a68a]" : "text-gray-900"
+                  }`}
+                  onClick={() => chooseOption(option.value)}
+                >
+                  {option.label}
+                </button>
+              ))
+            ) : (
+              <div className="px-3 py-2 text-sm text-gray-500">Nuk u gjet asnje rezultat.</div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function authRedirectUrl() {
@@ -222,8 +339,9 @@ export default function App() {
   const [paymentSchoolPercent, setPaymentSchoolPercent] = useState(5);
 
   const [studentSearch, setStudentSearch] = useState("");
-  const [studentGroupFilter, setStudentGroupFilter] = useState("");
+  const [studentGroupFilter, setStudentGroupFilter] = useState(currentMonthInput());
   const [teacherSearch, setTeacherSearch] = useState("");
+  const [teacherMonthFilter, setTeacherMonthFilter] = useState(currentMonthInput());
   const [courseSearch, setCourseSearch] = useState("");
   const [paymentSearch, setPaymentSearch] = useState("");
   const [paymentTeacherFilter, setPaymentTeacherFilter] = useState("");
@@ -251,6 +369,7 @@ export default function App() {
   const [editingStudentEmail, setEditingStudentEmail] = useState("");
   const [editingStudentCourse, setEditingStudentCourse] = useState("");
   const [editingStudentGroup, setEditingStudentGroup] = useState("");
+  const [editingStudentStudentGroup, setEditingStudentStudentGroup] = useState("");
   const [editingStudentTeacherId, setEditingStudentTeacherId] = useState("");
 
   const [editingTeacherId, setEditingTeacherId] = useState(null);
@@ -362,6 +481,19 @@ export default function App() {
     </div>
   );
 
+  const sortedCoursesAlpha = useMemo(
+    () => [...courses].sort((first, second) => compareText(first.name, second.name)),
+    [courses]
+  );
+  const sortedTeachersAlpha = useMemo(
+    () => [...teachers].sort((first, second) => compareText(first.name, second.name)),
+    [teachers]
+  );
+  const sortedStudentsAlpha = useMemo(
+    () => [...students].sort((first, second) => compareText(studentOptionLabel(first), studentOptionLabel(second))),
+    [students]
+  );
+
   const normalizeStudent = (row) => ({
     id: row.id,
     name: row.name || [row.first_name, row.last_name].filter(Boolean).join(" "),
@@ -373,6 +505,7 @@ export default function App() {
     email: row.email || "",
     course: row.course || "",
     group: row.group || "",
+    studentGroup: row.student_group || "",
     teacherId: row.teacher_id,
     archivedAt: row.archived_at,
   });
@@ -431,6 +564,7 @@ export default function App() {
     email: student.email,
     course: student.course,
     group: student.group || null,
+    student_group: student.studentGroup || null,
     teacher_id: student.teacherId ?? null,
   });
 
@@ -844,6 +978,7 @@ export default function App() {
       email: studentForm.email.trim(),
       course: studentForm.course,
       group: studentForm.group,
+      studentGroup: studentForm.studentGroup.trim(),
       teacherId: studentForm.teacherId || null,
     };
 
@@ -890,7 +1025,8 @@ export default function App() {
             phone: getExcelValue(row, ["Numri i telefonit", "Telefoni", "Phone", "Phone Number"]),
             email: getExcelValue(row, ["Emaili", "Email", "E-mail"]),
             course: getExcelValue(row, ["Kursi", "Course"]),
-            group: getExcelValue(row, ["Grupi", "Group"]),
+            group: getExcelValue(row, ["Muaji", "Month", "Month Year"]),
+            studentGroup: getExcelValue(row, ["Grupi", "Group", "Student Group"]),
             teacherId: teacher ? teacher.id : null,
           };
         })
@@ -1226,6 +1362,7 @@ export default function App() {
     setEditingStudentEmail(student.email || "");
     setEditingStudentCourse(student.course || "");
     setEditingStudentGroup(student.group || "");
+    setEditingStudentStudentGroup(student.studentGroup || "");
     setEditingStudentTeacherId(String(student.teacherId || ""));
   };
 
@@ -1239,6 +1376,7 @@ export default function App() {
     setEditingStudentEmail("");
     setEditingStudentCourse("");
     setEditingStudentGroup("");
+    setEditingStudentStudentGroup("");
     setEditingStudentTeacherId("");
   };
 
@@ -1256,6 +1394,7 @@ export default function App() {
       email: editingStudentEmail.trim(),
       course: editingStudentCourse,
       group: editingStudentGroup,
+      studentGroup: editingStudentStudentGroup.trim(),
       teacherId: editingStudentTeacherId || null,
     };
     try {
@@ -1298,7 +1437,7 @@ export default function App() {
   };
 
   const openAssignStudentsModal = () => {
-    const initialTeacherId = selectedTeacherView || teachers[0]?.id || "";
+    const initialTeacherId = selectedTeacherView || sortedTeachersAlpha[0]?.id || "";
     setAssignTeacherId(initialTeacherId ? String(initialTeacherId) : "");
     setAssignStudentIds(
       initialTeacherId
@@ -1521,6 +1660,7 @@ export default function App() {
       student.email,
       student.course,
       formatMonthYear(student.group),
+      student.studentGroup,
       teacher?.name,
     ].some((value) => String(value || "").toLowerCase().includes(q));
   });
@@ -1528,14 +1668,18 @@ export default function App() {
     studentGroupFilter ? student.group === studentGroupFilter : true
   );
 
-  const selectedTeacherStudents = students.filter(
-    (student) => sameId(student.teacherId, selectedTeacherView)
-  );
+  const selectedTeacherStudents = students.filter((student) => {
+    const matchesTeacher = sameId(student.teacherId, selectedTeacherView);
+    const matchesMonth = teacherMonthFilter ? student.group === teacherMonthFilter : true;
+    return matchesTeacher && matchesMonth;
+  });
   const sortedSelectedTeacherStudents = sortRows(selectedTeacherStudents, "selectedTeacherStudents", {
     nr: (_student, index) => index + 1,
     name: (student) => student.firstName || student.name,
     lastName: (student) => student.lastName,
     course: (student) => student.course,
+    group: (student) => student.group,
+    studentGroup: (student) => student.studentGroup,
   });
 
   const activePaymentTeacherFilter = paymentTeacherFilter && teachers.some((t) => t.name === paymentTeacherFilter) ? paymentTeacherFilter : "";
@@ -1666,6 +1810,8 @@ export default function App() {
       student.phone,
       student.email,
       student.course,
+      formatMonthYear(student.group),
+      student.studentGroup,
     ].some((value) => String(value || "").toLowerCase().includes(q));
   });
 
@@ -1711,14 +1857,20 @@ export default function App() {
     city: (student) => student.city,
     course: (student) => student.course,
     group: (student) => student.group,
+    studentGroup: (student) => student.studentGroup,
     teacherName: (student) => teachers.find((teacher) => sameId(teacher.id, student.teacherId))?.name || "Pa mesues",
     payment: (student) => (hasStudentCurrentPayment(student) ? 1 : 0),
   });
 
+  const teacherStudentsForMonth = (teacherId) =>
+    students.filter(
+      (student) => sameId(student.teacherId, teacherId) && (!teacherMonthFilter || student.group === teacherMonthFilter)
+    );
+
   const filteredTeachers = teachers.filter((teacher) => {
     const q = teacherSearch.trim().toLowerCase();
     if (!q) return true;
-    const teacherStudents = students.filter((student) => sameId(student.teacherId, teacher.id));
+    const teacherStudents = teacherStudentsForMonth(teacher.id);
     return (
       teacher.name.toLowerCase().includes(q) ||
       (teacher.firstName || "").toLowerCase().includes(q) ||
@@ -1732,7 +1884,7 @@ export default function App() {
     nr: (_teacher, index) => index + 1,
     name: (teacher) => teacher.firstName || teacher.name,
     lastName: (teacher) => teacher.lastName,
-    studentsCount: (teacher) => students.filter((student) => sameId(student.teacherId, teacher.id)).length,
+    studentsCount: (teacher) => teacherStudentsForMonth(teacher.id).length,
   });
 
   const sortedPayments = sortRows(filteredPayments, "payments", {
@@ -1814,14 +1966,16 @@ export default function App() {
     const teacher = teachers.find((item) => sameId(item.id, fallbackTeacherId));
     return sum + Number(payment.amount || 0) * (paymentTeacherPercentValue(payment, teacher) / 100);
   }, 0);
-  const overviewSchoolShare = overviewPayments.reduce(
-    (sum, payment) => sum + Number(payment.amount || 0) * (paymentSchoolPercentValue(payment) / 100),
-    0
-  );
   const overviewExpenses = expenses
     .filter((expense) => monthFromDate(expense.date) === financeOverviewMonth)
     .reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
-  const overviewProfit = overviewSchoolShare - overviewExpenses;
+  const carriedSchoolShare = payments
+    .filter((payment) => monthIsOnOrBefore(payment.date, financeOverviewMonth))
+    .reduce((sum, payment) => sum + Number(payment.amount || 0) * (paymentSchoolPercentValue(payment) / 100), 0);
+  const carriedExpenses = expenses
+    .filter((expense) => monthIsOnOrBefore(expense.date, financeOverviewMonth))
+    .reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
+  const overviewProfit = carriedSchoolShare - carriedExpenses;
 
   const sortedExpenses = sortRows(filteredExpenses, "finance", {
     nr: (_expense, index) => index + 1,
@@ -2154,7 +2308,7 @@ export default function App() {
       {
         name: "Nxenesit",
         rows: [
-          ["Nr", "Emri", "Mbiemri", "Mosha", "Qyteti", "Telefoni", "Emaili", "Kursi", "Grupi", "Mesuesi", "Pagesa"],
+          ["Nr", "Emri", "Mbiemri", "Mosha", "Qyteti", "Telefoni", "Emaili", "Kursi", "Muaji", "Grupi", "Mesuesi", "Pagesa"],
           ...students.map((student, index) => {
             const teacher = teacherById(student.teacherId);
             return [
@@ -2167,6 +2321,7 @@ export default function App() {
               student.email || "",
               student.course || "",
               formatMonthYear(student.group),
+              student.studentGroup || "",
               teacher?.name || "Pa mesues",
               hasStudentCurrentPayment(student) ? "E paguar" : "Pa paguar",
             ];
@@ -2243,13 +2398,14 @@ export default function App() {
       {
         name: "Archive Nxenes",
         rows: [
-          ["Nr", "Emri", "Mbiemri", "Kursi", "Grupi", "Mesuesi"],
+          ["Nr", "Emri", "Mbiemri", "Kursi", "Muaji", "Grupi", "Mesuesi"],
           ...archive.students.map((student, index) => [
             index + 1,
             student.firstName || student.name,
             student.lastName || "",
             student.course || "",
             formatMonthYear(student.group),
+            student.studentGroup || "",
             teacherById(student.teacherId)?.name || "Pa mesues",
           ]),
         ],
@@ -2384,11 +2540,11 @@ export default function App() {
       <button
         type="button"
         onClick={() => setIsMobileSidebarOpen(true)}
-        className="fixed left-3 top-3 z-50 flex h-11 w-11 items-center justify-center rounded-lg bg-white shadow-md lg:hidden"
+        className="fixed left-3 top-3 z-50 flex h-12 w-12 items-center justify-center rounded-lg bg-white shadow-md lg:hidden"
         aria-label="Hap sidebar"
         title="Hap sidebar"
       >
-        <img src={sidebarIcon} alt="" className="h-5 w-5" />
+        <img src={sidebarIcon} alt="" className="h-6 w-6" />
       </button>
       {isMobileSidebarOpen && (
         <div className="fixed inset-0 z-40 bg-black/40 lg:hidden" onClick={() => setIsMobileSidebarOpen(false)} />
@@ -2404,14 +2560,14 @@ export default function App() {
           <button
             type="button"
             onClick={() => setIsSidebarCollapsed((prev) => !prev)}
-            className={`sidebar-collapse-button mb-2 hidden h-9 w-full items-center rounded-lg transition hover:bg-white/10 lg:flex ${isSidebarCollapsed ? "lg:justify-center lg:px-0" : "lg:justify-start lg:px-3"}`}
+            className={`sidebar-collapse-button mb-2 hidden h-10 w-full items-center rounded-lg transition hover:bg-white/10 lg:flex ${isSidebarCollapsed ? "lg:justify-center lg:px-0" : "lg:justify-start lg:px-3"}`}
             aria-label={isSidebarCollapsed ? "Hap sidebar" : "Mbyll sidebar"}
             title={isSidebarCollapsed ? "Hap sidebar" : "Mbyll sidebar"}
           >
             <img
               src={sidebarIcon}
               alt=""
-              className="h-5 w-5"
+              className="h-6 w-6"
             />
           </button>
           <div className="sidebar-nav space-y-2 lg:space-y-1.5">
@@ -2487,7 +2643,7 @@ export default function App() {
             </div>
 
             <div className={tableWrap}>
-              <table className="min-w-[76rem] w-full text-sm">
+              <table className="min-w-[82rem] w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-200">
                     <th className={thClass}>Nr</th>
@@ -2498,7 +2654,8 @@ export default function App() {
                     <th className={thClass}>Telefoni</th>
                     <th className={thClass}>Emaili</th>
                     <th className={thClass}>{sortButton("students", "course", "Kursi")}</th>
-                    <th className={thClass}>{sortButton("students", "group", "Grupi")}</th>
+                    <th className={thClass}>{sortButton("students", "group", "Muaji")}</th>
+                    <th className={thClass}>{sortButton("students", "studentGroup", "Grupi")}</th>
                     <th className={thClass}>{sortButton("students", "payment", "Pagesa")}</th>
                     <th className={thClass}>{sortButton("students", "teacherName", "Mësuesi")}</th>
                     <th className={thClass}>Veprime</th>
@@ -2520,17 +2677,22 @@ export default function App() {
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingStudentPhone} onChange={(e) => setEditingStudentPhone(e.target.value)} /> : (student.phone || "-")}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingStudentEmail} onChange={(e) => setEditingStudentEmail(e.target.value)} type="email" /> : (student.email || "-")}</td>
                         <td className={tdClass}>{isEditing ? (
-                          <select className={input} value={editingStudentCourse} onChange={(e) => setEditingStudentCourse(e.target.value)}>
-                            <option value="">Zgjedh kursin</option>
-                            {editingStudentCourse && !courses.some((course) => course.name === editingStudentCourse) && (
-                              <option value={editingStudentCourse}>{editingStudentCourse}</option>
-                            )}
-                            {courses.map((course) => (
-                              <option key={course.id} value={course.name}>{course.name}</option>
-                            ))}
-                          </select>
+                          <SearchableSelect
+                            className={input}
+                            value={editingStudentCourse}
+                            onChange={setEditingStudentCourse}
+                            placeholder="Zgjedh kursin"
+                            options={[
+                              { value: "", label: "Zgjedh kursin" },
+                              ...(editingStudentCourse && !courses.some((course) => course.name === editingStudentCourse)
+                                ? [{ value: editingStudentCourse, label: editingStudentCourse }]
+                                : []),
+                              ...sortedCoursesAlpha.map((course) => ({ value: course.name, label: course.name })),
+                            ]}
+                          />
                         ) : (student.course || "-")}</td>
                         <td className={tdClass}>{isEditing ? <input className={dateInput} type="month" value={editingStudentGroup} onChange={(e) => setEditingStudentGroup(e.target.value)} /> : formatMonthYear(student.group)}</td>
+                        <td className={tdClass}>{isEditing ? <input className={input} value={editingStudentStudentGroup} onChange={(e) => setEditingStudentStudentGroup(e.target.value)} placeholder="gr1" /> : (student.studentGroup || "-")}</td>
                         <td className={tdClass}>
                           {hasPayment && !isEditing ? (
                             <img
@@ -2550,12 +2712,19 @@ export default function App() {
                         </td>
                         <td className={tdClass}>
                           {isEditing ? (
-                            <select className={input} value={editingStudentTeacherId} onChange={(e) => setEditingStudentTeacherId(e.target.value)}>
-                              <option value="">Zgjedh mësuesin</option>
-                              {teachers.map((teacherOption) => (
-                                <option key={teacherOption.id} value={teacherOption.id}>{teacherOption.name}</option>
-                              ))}
-                            </select>
+                            <SearchableSelect
+                              className={input}
+                              value={editingStudentTeacherId}
+                              onChange={setEditingStudentTeacherId}
+                              placeholder="Zgjedh mësuesin"
+                              options={[
+                                { value: "", label: "Zgjedh mësuesin" },
+                                ...sortedTeachersAlpha.map((teacherOption) => ({
+                                  value: teacherOption.id,
+                                  label: teacherOption.name,
+                                })),
+                              ]}
+                            />
                           ) : (teacher?.name || "Pa mësues")}
                         </td>
                         <td className={tdClass}>
@@ -2589,12 +2758,16 @@ export default function App() {
                 <h2 className="text-2xl font-bold" style={{ color: PRIMARY }}>Mësuesit</h2>
                 <p className="text-gray-500">Kliko një mësues për t’i parë nxënësit e tij poshtë.</p>
               </div>
-              <div className="w-full lg:w-80">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full lg:w-[44rem]">
                 {searchField({
                   value: teacherSearch,
                   onChange: (e) => setTeacherSearch(e.target.value),
                   placeholder: "Kërko sipas emrit ose nxënësve",
                 })}
+                <input className={dateInput} type="month" value={teacherMonthFilter} onChange={(e) => setTeacherMonthFilter(e.target.value)} />
+                <button onClick={() => setTeacherMonthFilter("")} className={mainBtn} style={secondaryBtnStyle}>
+                  {actionLabel("clear", "Pastro filtrin")}
+                </button>
               </div>
             </div>
 
@@ -2626,18 +2799,20 @@ export default function App() {
                   {sortedTeachers.map((teacher, index) => {
                     const isSelected = selectedTeacherView === teacher.id;
                     const isEditing = editingTeacherId === teacher.id;
-                    const countStudents = students.filter((student) => sameId(student.teacherId, teacher.id)).length;
+                    const countStudents = teacherStudentsForMonth(teacher.id).length;
                     return (
                       <tr key={teacher.id} onClick={() => setSelectedTeacherView((prev) => (prev === teacher.id ? null : teacher.id))} className={`${rowHover} cursor-pointer ${isSelected ? selectedRow : ""}`}>
                         <td className={tdClass}>{index + 1}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingTeacherFirstName} onChange={(e) => setEditingTeacherFirstName(e.target.value)} /> : (teacher.firstName || teacher.name)}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingTeacherLastName} onChange={(e) => setEditingTeacherLastName(e.target.value)} /> : (teacher.lastName || "-")}</td>
                         <td className={tdClass}>{isEditing ? (
-                          <select className={input} value={editingTeacherPercent} onChange={(e) => setEditingTeacherPercent(e.target.value)}>
-                            {percentOptions.map((percent) => (
-                              <option key={percent} value={percent}>{percent}%</option>
-                            ))}
-                          </select>
+                          <SearchableSelect
+                            className={input}
+                            value={editingTeacherPercent}
+                            onChange={setEditingTeacherPercent}
+                            placeholder="Përqindja"
+                            options={percentOptions.map((percent) => ({ value: percent, label: `${percent}%` }))}
+                          />
                         ) : `${teacher.percent}%`}</td>
                         <td className={tdClass}>{countStudents}</td>
                         <td className={tdClass}>
@@ -2666,13 +2841,15 @@ export default function App() {
               <div className="mt-6 border rounded-lg lg:rounded-2xl p-3 sm:p-4 bg-gray-50 border-gray-200">
                 <h3 className="text-lg font-bold mb-3" style={{ color: PRIMARY }}>Nxënësit e mësuesit të zgjedhur</h3>
                 <div className={tableWrap}>
-                  <table className="min-w-[36rem] w-full text-sm">
+                  <table className="min-w-[48rem] w-full text-sm">
                     <thead>
                       <tr className="border-b border-gray-200">
                         <th className={thClass}>Nr</th>
                         <th className={thClass}>{sortButton("selectedTeacherStudents", "name", "Emri")}</th>
                         <th className={thClass}>{sortButton("selectedTeacherStudents", "lastName", "Mbiemri")}</th>
                         <th className={thClass}>{sortButton("selectedTeacherStudents", "course", "Kursi")}</th>
+                        <th className={thClass}>{sortButton("selectedTeacherStudents", "group", "Muaji")}</th>
+                        <th className={thClass}>{sortButton("selectedTeacherStudents", "studentGroup", "Grupi")}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -2683,10 +2860,16 @@ export default function App() {
                             <td className={tdClass}>{student.firstName || student.name}</td>
                             <td className={tdClass}>{student.lastName || "-"}</td>
                             <td className={tdClass}>{student.course || "-"}</td>
+                            <td className={tdClass}>{formatMonthYear(student.group)}</td>
+                            <td className={tdClass}>{student.studentGroup || "-"}</td>
                           </tr>
                         ))
                       ) : (
-                        <tr><td className={tdClass} colSpan={4}>Ky mësues nuk ka nxënës.</td></tr>
+                        <tr>
+                          <td className={tdClass} colSpan={6}>
+                            {teacherMonthFilter ? "Ky mësues nuk ka nxënës për këtë muaj." : "Ky mësues nuk ka nxënës."}
+                          </td>
+                        </tr>
                       )}
                     </tbody>
                   </table>
@@ -2709,12 +2892,16 @@ export default function App() {
                   onChange: (e) => setPaymentSearch(e.target.value),
                   placeholder: "Kërko pagesa",
                 })}
-                <select className={input} value={activePaymentTeacherFilter} onChange={(e) => setPaymentTeacherFilter(e.target.value)}>
-                  <option value="">Të gjithë mësuesit</option>
-                  {teachers.map((teacher) => (
-                    <option key={teacher.id} value={teacher.name}>{teacher.name}</option>
-                  ))}
-                </select>
+                <SearchableSelect
+                  className={input}
+                  value={activePaymentTeacherFilter}
+                  onChange={setPaymentTeacherFilter}
+                  placeholder="Të gjithë mësuesit"
+                  options={[
+                    { value: "", label: "Të gjithë mësuesit" },
+                    ...sortedTeachersAlpha.map((teacher) => ({ value: teacher.name, label: teacher.name })),
+                  ]}
+                />
               </div>
             </div>
 
@@ -2744,12 +2931,19 @@ export default function App() {
                       <tr key={payment.id} className={rowHover}>
                         <td className={tdClass}>{index + 1}</td>
                         <td className={tdClass}>{isEditing ? (
-                          <select className={input} value={editingPaymentStudentId} onChange={(e) => changeEditingPaymentStudent(e.target.value)}>
-                            <option value="">Zgjedh nxënësin</option>
-                            {students.map((student) => (
-                              <option key={student.id} value={student.id}>{student.name}</option>
-                            ))}
-                          </select>
+                          <SearchableSelect
+                            className={input}
+                            value={editingPaymentStudentId}
+                            onChange={changeEditingPaymentStudent}
+                            placeholder="Zgjedh nxënësin"
+                            options={[
+                              { value: "", label: "Zgjedh nxënësin" },
+                              ...sortedStudentsAlpha.map((student) => ({
+                                value: student.id,
+                                label: studentOptionLabel(student),
+                              })),
+                            ]}
+                          />
                         ) : payment.studentName}</td>
                         <td className={tdClass}>{payment.teacherName}</td>
                         <td className={tdClass}>{isEditing ? (
@@ -2798,12 +2992,16 @@ export default function App() {
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 w-full xl:w-auto">
                 <input className={dateInput} type="month" value={financeMonth} onChange={(e) => setFinanceMonth(e.target.value)} />
-                <select className={input} value={activeFinanceTeacherFilter} onChange={(e) => setFinanceTeacherFilter(e.target.value)}>
-                  <option value="">Të gjithë mësuesit</option>
-                  {teachers.map((teacher) => (
-                    <option key={teacher.id} value={teacher.name}>{teacher.name}</option>
-                  ))}
-                </select>
+                <SearchableSelect
+                  className={input}
+                  value={activeFinanceTeacherFilter}
+                  onChange={setFinanceTeacherFilter}
+                  placeholder="Të gjithë mësuesit"
+                  options={[
+                    { value: "", label: "Të gjithë mësuesit" },
+                    ...sortedTeachersAlpha.map((teacher) => ({ value: teacher.name, label: teacher.name })),
+                  ]}
+                />
                 <button onClick={() => openFinanceExportNoteModal("excel")} className={mainBtn} style={secondaryBtnStyle}>{actionLabel("export", "Excel")}</button>
                 <button onClick={() => openFinanceExportNoteModal("pdf")} className={mainBtn} style={primaryBtnStyle}>{actionLabel("export", "PDF")}</button>
               </div>
@@ -2853,6 +3051,13 @@ export default function App() {
               <span className="font-semibold" style={{ color: PRIMARY }}>Administrata</span>
               <span className="font-bold">
                 {formatCurrency(sortedTeacherEarnings.reduce((sum, teacher) => sum + Number(teacher.adminShare || 0), 0))}
+              </span>
+            </div>
+
+            <div className="mt-2 flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm">
+              <span className="font-semibold" style={{ color: PRIMARY }}>Shkolla</span>
+              <span className="font-bold">
+                {formatCurrency(sortedTeacherEarnings.reduce((sum, teacher) => sum + Number(teacher.schoolShare || 0), 0))}
               </span>
             </div>
 
@@ -3027,10 +3232,13 @@ export default function App() {
                         <td className={tdClass}>{index + 1}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingCourseName} onChange={(e) => setEditingCourseName(e.target.value)} /> : course.name}</td>
                         <td className={tdClass}>{isEditing ? (
-                          <select className={input} value={editingCoursePricingType} onChange={(e) => setEditingCoursePricingType(e.target.value)}>
-                            <option value="fixed">Mujore</option>
-                            <option value="hourly">Me orë</option>
-                          </select>
+                          <SearchableSelect
+                            className={input}
+                            value={editingCoursePricingType}
+                            onChange={setEditingCoursePricingType}
+                            placeholder="Lloji"
+                            options={pricingTypeOptions}
+                          />
                         ) : pricingTypeLabel(course.pricingType)}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingCoursePrice} onChange={(e) => setEditingCoursePrice(e.target.value)} type="number" min="0" step="0.01" /> : formatCurrency(course.price)}</td>
                         <td className={tdClass}>
@@ -3299,12 +3507,19 @@ export default function App() {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <select className={input} value={selectedStudent} onChange={(e) => changePaymentStudent(e.target.value)} required>
-                  <option value="">Zgjedh nxënësin</option>
-                  {students.map((student) => (
-                    <option key={student.id} value={student.id}>{student.name}</option>
-                  ))}
-                </select>
+                <SearchableSelect
+                  className={input}
+                  value={selectedStudent}
+                  onChange={changePaymentStudent}
+                  placeholder="Zgjedh nxënësin"
+                  options={[
+                    { value: "", label: "Zgjedh nxënësin" },
+                    ...sortedStudentsAlpha.map((student) => ({
+                      value: student.id,
+                      label: studentOptionLabel(student),
+                    })),
+                  ]}
+                />
                 {isSelectedPaymentHourly && (
                   <>
                     <input className={input} value={paymentHours} onChange={(e) => changePaymentHours(e.target.value)} placeholder="Orët" type="number" min="0" step="0.25" required />
@@ -3470,19 +3685,32 @@ export default function App() {
                 <input className={input} value={studentForm.city} onChange={(e) => setStudentForm((prev) => ({ ...prev, city: e.target.value }))} placeholder="Qyteti" />
                 <input className={input} value={studentForm.phone} onChange={(e) => setStudentForm((prev) => ({ ...prev, phone: e.target.value }))} placeholder="Numri i telefonit" />
                 <input className={input} value={studentForm.email} onChange={(e) => setStudentForm((prev) => ({ ...prev, email: e.target.value }))} placeholder="Emaili" type="email" />
-                <select className={`${input} md:col-span-2`} value={studentForm.course} onChange={(e) => setStudentForm((prev) => ({ ...prev, course: e.target.value }))} required>
-                  <option value="">Zgjedh kursin</option>
-                  {courses.map((course) => (
-                    <option key={course.id} value={course.name}>{course.name}</option>
-                  ))}
-                </select>
-                <input className={`${dateInput} md:col-span-2`} type="month" value={studentForm.group} onChange={(e) => setStudentForm((prev) => ({ ...prev, group: e.target.value }))} />
-                <select className={`${input} md:col-span-2`} value={studentForm.teacherId} onChange={(e) => setStudentForm((prev) => ({ ...prev, teacherId: e.target.value }))}>
-                  <option value="">Pa mesues</option>
-                  {teachers.map((teacher) => (
-                    <option key={teacher.id} value={teacher.id}>{teacher.name}</option>
-                  ))}
-                </select>
+                <div className="md:col-span-2">
+                  <SearchableSelect
+                    className={input}
+                    value={studentForm.course}
+                    onChange={(nextValue) => setStudentForm((prev) => ({ ...prev, course: nextValue }))}
+                    placeholder="Zgjedh kursin"
+                    options={[
+                      { value: "", label: "Zgjedh kursin" },
+                      ...sortedCoursesAlpha.map((course) => ({ value: course.name, label: course.name })),
+                    ]}
+                  />
+                </div>
+                <input className={dateInput} type="month" value={studentForm.group} onChange={(e) => setStudentForm((prev) => ({ ...prev, group: e.target.value }))} aria-label="Muaji" title="Muaji" />
+                <input className={input} value={studentForm.studentGroup} onChange={(e) => setStudentForm((prev) => ({ ...prev, studentGroup: e.target.value }))} placeholder="Grupi (p.sh. gr1)" />
+                <div className="md:col-span-2">
+                  <SearchableSelect
+                    className={input}
+                    value={studentForm.teacherId}
+                    onChange={(nextValue) => setStudentForm((prev) => ({ ...prev, teacherId: nextValue }))}
+                    placeholder="Pa mesues"
+                    options={[
+                      { value: "", label: "Pa mesues" },
+                      ...sortedTeachersAlpha.map((teacher) => ({ value: teacher.id, label: teacher.name })),
+                    ]}
+                  />
+                </div>
               </div>
 
               <div className="flex flex-col sm:flex-row sm:justify-end gap-2">
@@ -3511,11 +3739,15 @@ export default function App() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <input className={input} value={teacherForm.firstName} onChange={(e) => setTeacherForm((prev) => ({ ...prev, firstName: e.target.value }))} placeholder="Emri" required />
                 <input className={input} value={teacherForm.lastName} onChange={(e) => setTeacherForm((prev) => ({ ...prev, lastName: e.target.value }))} placeholder="Mbiemri" required />
-                <select className={`${input} md:col-span-2`} value={teacherForm.percent} onChange={(e) => setTeacherForm((prev) => ({ ...prev, percent: e.target.value }))}>
-                  {percentOptions.map((percent) => (
-                    <option key={percent} value={percent}>{percent}%</option>
-                  ))}
-                </select>
+                <div className="md:col-span-2">
+                  <SearchableSelect
+                    className={input}
+                    value={teacherForm.percent}
+                    onChange={(nextValue) => setTeacherForm((prev) => ({ ...prev, percent: nextValue }))}
+                    placeholder="Përqindja"
+                    options={percentOptions.map((percent) => ({ value: percent, label: `${percent}%` }))}
+                  />
+                </div>
               </div>
 
               <div className="flex flex-col sm:flex-row sm:justify-end gap-2">
@@ -3543,10 +3775,13 @@ export default function App() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <input className={input} value={courseForm.name} onChange={(e) => setCourseForm((prev) => ({ ...prev, name: e.target.value }))} placeholder="Emri i kursit" required />
-                <select className={input} value={courseForm.pricingType} onChange={(e) => setCourseForm((prev) => ({ ...prev, pricingType: e.target.value }))}>
-                  <option value="fixed">Mujore</option>
-                  <option value="hourly">Me orë</option>
-                </select>
+                <SearchableSelect
+                  className={input}
+                  value={courseForm.pricingType}
+                  onChange={(nextValue) => setCourseForm((prev) => ({ ...prev, pricingType: nextValue }))}
+                  placeholder="Lloji"
+                  options={pricingTypeOptions}
+                />
                 <input className={input} value={courseForm.price} onChange={(e) => setCourseForm((prev) => ({ ...prev, price: e.target.value }))} placeholder="Çmimi" type="number" min="0" step="0.01" required />
               </div>
 
@@ -3566,16 +3801,20 @@ export default function App() {
                 <p className="text-sm text-gray-500">Choose a teacher, then select the students for that teacher.</p>
               </div>
 
-              <select className={input} value={assignTeacherId} onChange={(e) => changeAssignTeacher(e.target.value)}>
-                <option value="">Choose teacher</option>
-                {teachers.map((teacher) => (
-                  <option key={teacher.id} value={teacher.id}>{teacher.name}</option>
-                ))}
-              </select>
+              <SearchableSelect
+                className={input}
+                value={assignTeacherId}
+                onChange={changeAssignTeacher}
+                placeholder="Choose teacher"
+                options={[
+                  { value: "", label: "Choose teacher" },
+                  ...sortedTeachersAlpha.map((teacher) => ({ value: teacher.id, label: teacher.name })),
+                ]}
+              />
 
               <div className="max-h-[50vh] overflow-y-auto rounded-lg border border-gray-200">
                 {students.some((student) => !student.teacherId || sameId(student.teacherId, assignTeacherId)) ? (
-                  students
+                  sortedStudentsAlpha
                     .filter((student) => !student.teacherId || sameId(student.teacherId, assignTeacherId))
                     .map((student) => {
                     const currentTeacher = teachers.find((teacher) => sameId(teacher.id, student.teacherId));
