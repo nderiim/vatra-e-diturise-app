@@ -1,5 +1,21 @@
 @import "tailwindcss";
 
+.app-button {
+  background: var(--btn-bg);
+  transition: background-color 150ms ease, transform 120ms ease, filter 150ms ease;
+}
+
+.app-button:hover:not(:disabled),
+button[style*="--btn-bg"]:hover:not(:disabled) {
+  background: var(--btn-hover) !important;
+}
+
+.app-button:active:not(:disabled),
+button[style*="--btn-bg"]:active:not(:disabled) {
+  background: var(--btn-active) !important;
+  transform: translateY(1px);
+}
+
 @media (orientation: landscape) and (pointer: coarse) and (max-height: 850px) {
   .app-sidebar .sidebar-brand {
     margin-bottom: 0.5rem !important;

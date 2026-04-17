@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -46,7 +46,11 @@ function monthFromDate(date) {
 }
 
 function currentDateInput() {
-  return new Date().toISOString().slice(0, 10);
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function currentMonthInput() {
@@ -73,6 +77,31 @@ function formatMonthYear(value) {
   return monthNames[Number(month) - 1] && year ? `${monthNames[Number(month) - 1]} ${year}` : value;
 }
 
+function parseMonthYear(value) {
+  const rawValue = String(value || "").trim();
+  if (!rawValue) return "";
+  if (/^\d{4}-\d{2}$/.test(rawValue)) return rawValue;
+
+  const [monthName, year] = rawValue.split(/\s+/);
+  const monthMap = {
+    janar: "01",
+    shkurt: "02",
+    mars: "03",
+    prill: "04",
+    maj: "05",
+    qershor: "06",
+    korrik: "07",
+    gusht: "08",
+    shtator: "09",
+    tetor: "10",
+    nentor: "11",
+    nentore: "11",
+    dhjetor: "12",
+  };
+  const month = monthMap[normalizeExcelKey(monthName)];
+  return month && year ? `${year}-${month}` : rawValue;
+}
+
 function monthIsOnOrBefore(date, targetMonth) {
   const rowMonth = monthFromDate(date);
   return !targetMonth || (rowMonth && rowMonth <= targetMonth);
@@ -80,12 +109,82 @@ function monthIsOnOrBefore(date, targetMonth) {
 
 function formatDateDisplay(date) {
   if (!date) return "-";
+  const isoValue = String(date).slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(isoValue)) {
+    const [year, month, day] = isoValue.split("-");
+    return `${day}-${month}-${year}`;
+  }
   const parsed = new Date(date);
   if (Number.isNaN(parsed.getTime())) return "-";
   const day = String(parsed.getDate()).padStart(2, "0");
   const month = String(parsed.getMonth() + 1).padStart(2, "0");
   const year = parsed.getFullYear();
-  return `${day}/${month}/${year}`;
+  return `${day}-${month}-${year}`;
+}
+
+function parseDateInput(value) {
+  if (!value) return new Date().toISOString();
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
+  if (typeof value === "number") {
+    const parsed = XLSX.SSF.parse_date_code(value);
+    if (parsed) {
+      return `${parsed.y}-${String(parsed.m).padStart(2, "0")}-${String(parsed.d).padStart(2, "0")}T00:00:00.000Z`;
+    }
+  }
+
+  const rawValue = String(value).trim();
+  const displayMatch = rawValue.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+  if (displayMatch) {
+    const [, day, month, year] = displayMatch;
+    return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}T00:00:00.000Z`;
+  }
+
+  const parsed = new Date(rawValue);
+  return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
+}
+
+function isoDateInputValue(value) {
+  if (!value) return "";
+  const rawValue = String(value).slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(rawValue)) return rawValue;
+  const parsed = parseDateInput(value);
+  return String(parsed).slice(0, 10);
+}
+
+function formatDateInputDisplay(value) {
+  const isoValue = isoDateInputValue(value);
+  if (!isoValue) return "";
+  const [year, month, day] = isoValue.split("-");
+  return `${day}-${month}-${year}`;
+}
+
+function parseDateDisplayValue(value) {
+  const rawValue = String(value || "").trim();
+  if (!rawValue) return "";
+
+  const displayMatch = rawValue.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+  const isoMatch = rawValue.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  const [, day, month, year] = displayMatch || [];
+  const [, isoYear, isoMonth, isoDay] = isoMatch || [];
+  const finalYear = year || isoYear;
+  const finalMonth = month || isoMonth;
+  const finalDay = day || isoDay;
+
+  if (!finalYear || !finalMonth || !finalDay) return "";
+
+  const paddedMonth = String(finalMonth).padStart(2, "0");
+  const paddedDay = String(finalDay).padStart(2, "0");
+  const parsed = new Date(`${finalYear}-${paddedMonth}-${paddedDay}T00:00:00.000Z`);
+  if (
+    Number.isNaN(parsed.getTime()) ||
+    parsed.getUTCFullYear() !== Number(finalYear) ||
+    parsed.getUTCMonth() + 1 !== Number(finalMonth) ||
+    parsed.getUTCDate() !== Number(finalDay)
+  ) {
+    return "";
+  }
+
+  return `${finalYear}-${paddedMonth}-${paddedDay}`;
 }
 
 function BrandMark() {
@@ -111,9 +210,20 @@ const emptyStudentForm = {
   teacherId: "",
 };
 
+const emptyEnrollmentForm = {
+  course: "",
+  group: "",
+  studentGroup: "",
+  teacherId: "",
+  status: "active",
+  endMonth: "",
+  note: "",
+};
+
 const emptyTeacherForm = {
   firstName: "",
   lastName: "",
+  email: "",
   percent: 80,
 };
 
@@ -128,6 +238,17 @@ const pricingTypeOptions = [
   { value: "fixed", label: "Mujore" },
 ];
 
+const enrollmentStatusOptions = [
+  { value: "active", label: "Aktiv" },
+  { value: "inactive", label: "Joaktiv" },
+  { value: "paused", label: "Pauzë" },
+  { value: "completed", label: "Përfunduar" },
+];
+
+function enrollmentStatusLabel(status) {
+  return enrollmentStatusOptions.find((option) => option.value === status)?.label || "Aktiv";
+}
+
 function normalizeExcelKey(key) {
   return String(key || "")
     .normalize("NFD")
@@ -140,6 +261,13 @@ function getExcelValue(row, keys) {
   const normalizedKeys = keys.map(normalizeExcelKey);
   const match = Object.entries(row).find(([key]) => normalizedKeys.includes(normalizeExcelKey(key)));
   return match ? String(match[1] || "").trim() : "";
+}
+
+function getWorkbookRows(workbook, sheetNames) {
+  const normalizedNames = sheetNames.map(normalizeExcelKey);
+  const sheetName = workbook.SheetNames.find((name) => normalizedNames.includes(normalizeExcelKey(name)));
+  if (!sheetName) return [];
+  return XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "" });
 }
 
 function sheetFromRows(rows) {
@@ -158,6 +286,10 @@ function sheetFromRows(rows) {
 
 function sameId(a, b) {
   return String(a ?? "") === String(b ?? "");
+}
+
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase();
 }
 
 function compareText(first, second) {
@@ -180,6 +312,7 @@ function SearchableSelect({
   searchPlaceholder = "Kërko...",
   className = "",
   disabled = false,
+  onOpen,
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -223,7 +356,10 @@ function SearchableSelect({
         type="button"
         className={`${className} flex items-center justify-between gap-2 text-left ${disabled ? "cursor-not-allowed opacity-60" : ""}`}
         onClick={() => {
-          if (!disabled) setIsOpen((prev) => !prev);
+          if (!disabled) {
+            onOpen?.();
+            setIsOpen((prev) => !prev);
+          }
         }}
         disabled={disabled}
       >
@@ -266,6 +402,49 @@ function SearchableSelect({
   );
 }
 
+function DateTextInput({ value, onChange, className = "", placeholder = "DD-MM-YYYY", ...props }) {
+  const [displayValue, setDisplayValue] = useState(formatDateInputDisplay(value));
+
+  useEffect(() => {
+    setDisplayValue(formatDateInputDisplay(value));
+  }, [value]);
+
+  const commitValue = (nextDisplayValue) => {
+    const parsedValue = parseDateDisplayValue(nextDisplayValue);
+    if (parsedValue) {
+      onChange(parsedValue);
+      setDisplayValue(formatDateInputDisplay(parsedValue));
+      return;
+    }
+
+    if (!nextDisplayValue.trim()) {
+      onChange("");
+      setDisplayValue("");
+      return;
+    }
+
+    setDisplayValue(formatDateInputDisplay(value));
+  };
+
+  return (
+    <input
+      {...props}
+      type="text"
+      inputMode="numeric"
+      className={className}
+      value={displayValue}
+      onChange={(event) => {
+        const nextValue = event.target.value.replace(/[^\d/-]/g, "");
+        setDisplayValue(nextValue);
+        const parsedValue = parseDateDisplayValue(nextValue);
+        if (parsedValue) onChange(parsedValue);
+      }}
+      onBlur={() => commitValue(displayValue)}
+      placeholder={placeholder}
+    />
+  );
+}
+
 function authRedirectUrl() {
   const configuredUrl = import.meta.env.VITE_SUPABASE_REDIRECT_URL?.trim();
   const fallbackUrl = window.location.origin;
@@ -293,6 +472,7 @@ export default function App() {
   const [teachers, setTeachers] = useState([]);
   const [payments, setPayments] = useState([]);
   const [courses, setCourses] = useState([]);
+  const [enrollments, setEnrollments] = useState([]);
   const [archive, setArchive] = useState({
     students: [],
     teachers: [],
@@ -302,10 +482,11 @@ export default function App() {
   });
   const [expenses, setExpenses] = useState([]);
   const [isDataLoading, setIsDataLoading] = useState(false);
+  const [hasLoadedData, setHasLoadedData] = useState(false);
   const [dataError, setDataError] = useState("");
 
   const [activeView, setActiveView] = useState("students");
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [selectedTeacherView, setSelectedTeacherView] = useState(null);
   const [selectedPagaTeacherView, setSelectedPagaTeacherView] = useState(null);
@@ -316,9 +497,14 @@ export default function App() {
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [authError, setAuthError] = useState("");
   const studentImportRef = useRef(null);
+  const allDataImportRef = useRef(null);
 
   const [isStudentModalOpen, setIsStudentModalOpen] = useState(false);
   const [studentForm, setStudentForm] = useState(emptyStudentForm);
+  const [isEnrollmentModalOpen, setIsEnrollmentModalOpen] = useState(false);
+  const [enrollmentStudentId, setEnrollmentStudentId] = useState("");
+  const [enrollmentForm, setEnrollmentForm] = useState({ ...emptyEnrollmentForm, group: currentMonthInput() });
+  const [editingEnrollmentId, setEditingEnrollmentId] = useState(null);
   const [isTeacherModalOpen, setIsTeacherModalOpen] = useState(false);
   const [teacherForm, setTeacherForm] = useState(emptyTeacherForm);
   const [isCourseModalOpen, setIsCourseModalOpen] = useState(false);
@@ -328,6 +514,7 @@ export default function App() {
   const [editingCoursePrice, setEditingCoursePrice] = useState("");
   const [editingCoursePricingType, setEditingCoursePricingType] = useState("fixed");
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+  const [paymentModalTitle, setPaymentModalTitle] = useState("Shto pagesë");
   const [selectedStudent, setSelectedStudent] = useState("");
   const [paymentAmount, setPaymentAmount] = useState("");
   const [paymentHours, setPaymentHours] = useState("");
@@ -345,6 +532,7 @@ export default function App() {
   const [courseSearch, setCourseSearch] = useState("");
   const [paymentSearch, setPaymentSearch] = useState("");
   const [paymentTeacherFilter, setPaymentTeacherFilter] = useState("");
+  const [paymentMonthFilter, setPaymentMonthFilter] = useState(currentMonthInput());
   const [financeMonth, setFinanceMonth] = useState(currentMonthInput());
   const [financeOverviewMonth, setFinanceOverviewMonth] = useState(currentMonthInput());
   const [financeTeacherFilter, setFinanceTeacherFilter] = useState("");
@@ -375,6 +563,7 @@ export default function App() {
   const [editingTeacherId, setEditingTeacherId] = useState(null);
   const [editingTeacherFirstName, setEditingTeacherFirstName] = useState("");
   const [editingTeacherLastName, setEditingTeacherLastName] = useState("");
+  const [editingTeacherEmail, setEditingTeacherEmail] = useState("");
   const [editingTeacherPercent, setEditingTeacherPercent] = useState(80);
   const [isAssignStudentsModalOpen, setIsAssignStudentsModalOpen] = useState(false);
   const [assignTeacherId, setAssignTeacherId] = useState("");
@@ -406,6 +595,7 @@ export default function App() {
     paga: { key: "name", direction: "asc" },
     finance: { key: "date", direction: "desc" },
     courses: { key: "name", direction: "asc" },
+    enrollments: { key: "group", direction: "desc" },
     selectedTeacherStudents: { key: "nr", direction: "asc" },
     archive: { key: "name", direction: "asc" },
     archiveExpenses: { key: "date", direction: "desc" },
@@ -419,8 +609,8 @@ export default function App() {
   const input =
     "w-full min-w-0 max-w-full rounded-lg border bg-white border-gray-300 text-gray-900 px-3 py-2 text-sm sm:text-base outline-none focus:ring-2 focus:border-transparent";
   const dateInput = `${input} h-11 appearance-none leading-normal`;
-  const smallBtn = "inline-flex items-center justify-center gap-2 px-3 py-2 sm:py-1.5 rounded-lg text-sm font-medium transition text-white";
-  const mainBtn = "inline-flex items-center justify-center gap-2 w-full sm:w-auto rounded-lg text-white font-medium px-4 py-2";
+  const smallBtn = "app-button inline-flex items-center justify-center gap-2 px-3 py-2 sm:py-1.5 rounded-lg text-sm font-medium transition text-white";
+  const mainBtn = "app-button inline-flex items-center justify-center gap-2 w-full sm:w-auto rounded-lg text-white font-medium px-4 py-2";
   const thClass = "px-3 sm:px-4 py-4 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 whitespace-nowrap";
   const tdClass = "px-3 sm:px-4 py-4 align-middle whitespace-nowrap";
   const tableWrap = "overflow-x-auto rounded-lg py-2";
@@ -429,14 +619,32 @@ export default function App() {
   const selectedRow = "[&>td]:bg-[#80a68a] [&>td:first-child]:rounded-l-lg [&>td:last-child]:rounded-r-lg";
   const sortBtnClass = "flex items-center gap-1 uppercase tracking-wide";
 
-  const primaryBtnStyle = { background: SECONDARY };
-  const secondaryBtnStyle = { background: SECONDARY };
-  const warningBtnStyle = { background: WARNING };
-  const dangerBtnStyle = { background: DANGER };
+  const buttonStyle = (base, hover, active, extra = {}) => ({
+    "--btn-bg": base,
+    "--btn-hover": hover,
+    "--btn-active": active,
+    background: "var(--btn-bg)",
+    ...extra,
+  });
+  const primaryBtnStyle = buttonStyle(SECONDARY, "#4b7372", "#416866");
+  const secondaryBtnStyle = buttonStyle(SECONDARY, "#4b7372", "#416866");
+  const warningBtnStyle = buttonStyle(WARNING, "#c19512", "#aa830e");
+  const dangerBtnStyle = buttonStyle(DANGER, "#ad3326", "#972d22");
   const activeNavStyle = { background: HIGHLIGHT, color: "white" };
   const inactiveNavStyle = { color: "white" };
-  const disabledPrimaryBtnStyle = { background: SECONDARY, color: "white", cursor: "not-allowed", opacity: 0.55 };
+  const disabledPrimaryBtnStyle = buttonStyle(SECONDARY, SECONDARY, SECONDARY, { color: "white", cursor: "not-allowed", opacity: 0.55 });
   const currentUser = session?.user;
+  const adminEmails = (import.meta.env.VITE_ADMIN_EMAILS || "shtepiaediturise@gmail.com")
+    .split(",")
+    .map(normalizeEmail)
+    .filter(Boolean);
+  const currentUserEmail = normalizeEmail(currentUser?.email);
+  const isAdminUser = Boolean(currentUserEmail && adminEmails.includes(currentUserEmail));
+  const currentTeacherAccount = teachers.find((teacher) => normalizeEmail(teacher.email) === currentUserEmail);
+  const currentTeacherId = currentTeacherAccount?.id ?? null;
+  const isTeacherUser = Boolean(currentTeacherAccount && !isAdminUser);
+  const hasAppAccess = isAdminUser || Boolean(currentTeacherAccount);
+  const canManageData = isAdminUser;
   const icons = {
     search: searchIcon,
     clear: clearIcon,
@@ -464,6 +672,12 @@ export default function App() {
     </>
   );
 
+  const clearRowSelections = () => {
+    setSelectedStudentView(null);
+    setSelectedTeacherView(null);
+    setSelectedPagaTeacherView(null);
+  };
+
   const searchField = ({ value, onChange, placeholder }) => (
     <div className="relative w-full">
       <img
@@ -481,6 +695,49 @@ export default function App() {
     </div>
   );
 
+  const enrollmentStatusRank = (status) => {
+    if (status === "active") return 0;
+    if (status === "paused") return 1;
+    if (status === "completed") return 2;
+    return 3;
+  };
+
+  const studentEnrollmentRows = (studentId) =>
+    enrollments
+      .filter((enrollment) => sameId(enrollment.studentId, studentId))
+      .sort((first, second) => {
+        const statusSort = enrollmentStatusRank(first.status) - enrollmentStatusRank(second.status);
+        if (statusSort) return statusSort;
+        return compareText(second.group || second.createdAt, first.group || first.createdAt);
+      });
+
+  const activeEnrollmentForStudent = (student) => studentEnrollmentRows(student.id)[0] || null;
+
+  const enrichStudentWithEnrollment = (student) => {
+    const enrollment = activeEnrollmentForStudent(student);
+    const course = courses.find((item) => sameId(item.id, enrollment?.courseId) || item.name === enrollment?.course);
+    const teacher = teachers.find((item) => sameId(item.id, enrollment?.teacherId));
+    return {
+      ...student,
+      enrollmentId: enrollment?.id || "",
+      courseId: course?.id || enrollment?.courseId || "",
+      course: enrollment?.course || student.course || "",
+      group: enrollment?.group || student.group || "",
+      studentGroup: enrollment?.studentGroup || student.studentGroup || "",
+      teacherId: enrollment?.teacherId ?? student.teacherId ?? null,
+      teacherName: teacher?.name || enrollment?.teacherName || "",
+      enrollmentStatus: enrollment?.status || "active",
+      enrollmentEndMonth: enrollment?.endMonth || "",
+      enrollmentNote: enrollment?.note || "",
+    };
+  };
+
+  const studentsWithEnrollment = useMemo(
+    () => students.map((student) => enrichStudentWithEnrollment(student)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [students, enrollments, courses, teachers]
+  );
+
   const sortedCoursesAlpha = useMemo(
     () => [...courses].sort((first, second) => compareText(first.name, second.name)),
     [courses]
@@ -490,8 +747,8 @@ export default function App() {
     [teachers]
   );
   const sortedStudentsAlpha = useMemo(
-    () => [...students].sort((first, second) => compareText(studentOptionLabel(first), studentOptionLabel(second))),
-    [students]
+    () => [...studentsWithEnrollment].sort((first, second) => compareText(studentOptionLabel(first), studentOptionLabel(second))),
+    [studentsWithEnrollment]
   );
 
   const normalizeStudent = (row) => ({
@@ -512,12 +769,13 @@ export default function App() {
 
   const normalizeTeacher = (row) => ({
     id: row.id,
-    name: row.name || [row.first_name, row.last_name].filter(Boolean).join(" "),
-    firstName: row.first_name || "",
-    lastName: row.last_name || "",
-    percent: Number(row.percent ?? 80),
-    archivedAt: row.archived_at,
-  });
+  name: row.name || [row.first_name, row.last_name].filter(Boolean).join(" "),
+  firstName: row.first_name || "",
+  lastName: row.last_name || "",
+  email: row.email || "",
+  percent: Number(row.percent ?? 80),
+  archivedAt: row.archived_at,
+});
 
   const normalizeCourse = (row) => ({
     id: row.id,
@@ -527,10 +785,31 @@ export default function App() {
     archivedAt: row.archived_at,
   });
 
+  const normalizeEnrollment = (row) => ({
+    id: row.id,
+    studentId: row.student_id,
+    courseId: row.course_id || "",
+    course: row.course_name || "",
+    teacherId: row.teacher_id,
+    teacherName: row.teacher_name || "",
+    group: row.start_month || "",
+    endMonth: row.end_month || "",
+    studentGroup: row.group_name || "",
+    status: row.status || "active",
+    note: row.note || "",
+    archivedAt: row.archived_at,
+    createdAt: row.created_at,
+  });
+
   const normalizePayment = (row) => ({
     id: row.id,
     studentId: row.student_id,
     studentName: row.student_name || "",
+    enrollmentId: row.enrollment_id || "",
+    courseId: row.course_id || "",
+    courseName: row.course_name || "",
+    groupName: row.group_name || "",
+    paymentMonth: row.payment_month || monthFromDate(row.date),
     teacherId: row.teacher_id,
     teacherName: row.teacher_name || "",
     amount: Number(row.amount || 0),
@@ -569,11 +848,12 @@ export default function App() {
   });
 
   const teacherToRow = (teacher) => ({
-    name: teacher.name,
-    first_name: teacher.firstName,
-    last_name: teacher.lastName,
-    percent: Number(teacher.percent),
-  });
+  name: teacher.name,
+  first_name: teacher.firstName,
+  last_name: teacher.lastName,
+  email: teacher.email || null,
+  percent: Number(teacher.percent),
+});
 
   const courseToRow = (course) => ({
     name: course.name,
@@ -581,9 +861,31 @@ export default function App() {
     pricing_type: course.pricingType || "fixed",
   });
 
+  const enrollmentToRow = (enrollment) => {
+    const course = courses.find((item) => item.name === enrollment.course || sameId(item.id, enrollment.courseId));
+    const teacher = teachers.find((item) => sameId(item.id, enrollment.teacherId));
+    return {
+      student_id: enrollment.studentId == null ? null : String(enrollment.studentId),
+      course_id: course?.id == null ? enrollment.courseId || null : String(course.id),
+      course_name: enrollment.course || course?.name || "",
+      teacher_id: enrollment.teacherId == null || enrollment.teacherId === "" ? null : String(enrollment.teacherId),
+      teacher_name: teacher?.name || enrollment.teacherName || "",
+      start_month: enrollment.group || null,
+      end_month: enrollment.endMonth || null,
+      group_name: enrollment.studentGroup || null,
+      status: enrollment.status || "active",
+      note: enrollment.note || "",
+    };
+  };
+
   const paymentToRow = (payment) => ({
     student_id: payment.studentId ?? null,
     student_name: payment.studentName,
+    enrollment_id: payment.enrollmentId || null,
+    course_id: payment.courseId || null,
+    course_name: payment.courseName || "",
+    group_name: payment.groupName || "",
+    payment_month: payment.paymentMonth || monthFromDate(payment.date),
     teacher_id: payment.teacherId ?? null,
     teacher_name: payment.teacherName,
     amount: Number(payment.amount || 0),
@@ -632,17 +934,29 @@ export default function App() {
     if (showLoading) setIsDataLoading(true);
     setDataError("");
 
-    const [studentsResult, teachersResult, coursesResult, paymentsResult, expensesResult] = await Promise.all([
+    const [studentsResult, teachersResult, coursesResult, enrollmentsResult, paymentsResult, expensesResult] = await Promise.all([
       supabase.from("students").select("*"),
       supabase.from("teachers").select("*"),
       supabase.from("courses").select("*"),
+      supabase.from("enrollments").select("*"),
       supabase.from("payments").select("*"),
       supabase.from("expenses").select("*"),
     ]);
 
-    const firstError = [studentsResult, teachersResult, coursesResult, paymentsResult, expensesResult].find((result) => result.error)?.error;
+    const enrollmentsTableMissing =
+      enrollmentsResult.error &&
+      (enrollmentsResult.error.code === "42P01" || enrollmentsResult.error.message?.toLowerCase().includes("enrollments"));
+    const firstError = [
+      studentsResult,
+      teachersResult,
+      coursesResult,
+      enrollmentsTableMissing ? { error: null } : enrollmentsResult,
+      paymentsResult,
+      expensesResult,
+    ].find((result) => result.error)?.error;
     if (firstError) {
       setDataError(firstError.message);
+      setHasLoadedData(true);
       if (showLoading) setIsDataLoading(false);
       return;
     }
@@ -650,12 +964,16 @@ export default function App() {
     const nextStudents = splitArchived(studentsResult.data || [], normalizeStudent);
     const nextTeachers = splitArchived(teachersResult.data || [], normalizeTeacher);
     const nextCourses = splitArchived(coursesResult.data || [], normalizeCourse);
+    const nextEnrollments = enrollmentsTableMissing
+      ? { active: [], archived: [] }
+      : splitArchived(enrollmentsResult.data || [], normalizeEnrollment);
     const nextPayments = splitArchived(paymentsResult.data || [], normalizePayment);
     const nextExpenses = splitArchived(expensesResult.data || [], normalizeExpense);
 
     setStudents(nextStudents.active);
     setTeachers(nextTeachers.active);
     setCourses(nextCourses.active);
+    setEnrollments(nextEnrollments.active);
     setPayments(nextPayments.active);
     setExpenses(nextExpenses.active);
     setArchive({
@@ -665,6 +983,7 @@ export default function App() {
       payments: nextPayments.archived,
       expenses: nextExpenses.archived,
     });
+    setHasLoadedData(true);
     if (showLoading) setIsDataLoading(false);
   };
 
@@ -704,6 +1023,69 @@ export default function App() {
     window.alert(message);
   };
 
+  const buildEnrollmentFromStudent = (student, studentId, overrides = {}) => {
+    const course = courses.find((item) => item.name === student.course || sameId(item.id, student.courseId));
+    const teacher = teachers.find((item) => sameId(item.id, student.teacherId));
+    return {
+      studentId,
+      courseId: course?.id || student.courseId || "",
+      course: student.course || course?.name || "",
+      group: student.group || "",
+      studentGroup: student.studentGroup || "",
+      teacherId: student.teacherId || null,
+      teacherName: teacher?.name || "",
+      status: "active",
+      endMonth: "",
+      note: "",
+      ...overrides,
+    };
+  };
+
+  const currentActiveEnrollmentForStudent = (studentId) =>
+    enrollments.find((enrollment) => sameId(enrollment.studentId, studentId) && enrollment.status === "active");
+
+  const saveEnrollment = async (enrollment, existingId = null) => {
+    if (existingId) {
+      const savedEnrollment = await updateRow("enrollments", existingId, enrollmentToRow(enrollment), normalizeEnrollment);
+      setEnrollments((prev) =>
+        prev.map((item) => (sameId(item.id, existingId) ? savedEnrollment || { ...item, ...enrollment, id: existingId } : item))
+      );
+      return savedEnrollment || { ...enrollment, id: existingId };
+    }
+
+    const savedEnrollment = await insertRow("enrollments", enrollmentToRow(enrollment), normalizeEnrollment);
+    setEnrollments((prev) => [...prev, savedEnrollment]);
+    return savedEnrollment;
+  };
+
+  const saveActiveEnrollmentForStudent = async (studentId, student) => {
+    if (!student.course) return null;
+    const existingEnrollment = currentActiveEnrollmentForStudent(studentId) || studentEnrollmentRows(studentId)[0];
+    return saveEnrollment(
+      buildEnrollmentFromStudent(student, studentId, {
+        status: "active",
+        endMonth: "",
+        note: existingEnrollment?.note || "",
+      }),
+      existingEnrollment?.id || null
+    );
+  };
+
+  const updateStudentMirrorFromEnrollment = async (studentId, enrollment) => {
+    const student = students.find((item) => sameId(item.id, studentId));
+    if (!student) return null;
+    const nextStudent = {
+      ...student,
+      course: enrollment.course || "",
+      group: enrollment.group || "",
+      studentGroup: enrollment.studentGroup || "",
+      teacherId: enrollment.teacherId || null,
+    };
+    const savedStudent = await updateRow("students", studentId, studentToRow(nextStudent), normalizeStudent);
+    setStudents((prev) => prev.map((item) => (sameId(item.id, studentId) ? savedStudent || nextStudent : item)));
+    return savedStudent || nextStudent;
+  };
+
   useEffect(() => {
     if (!supabase) {
       setIsAuthLoading(false);
@@ -735,7 +1117,10 @@ export default function App() {
 
   useEffect(() => {
     if (session) {
+      setHasLoadedData(false);
       loadSupabaseData();
+    } else {
+      setHasLoadedData(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
@@ -799,12 +1184,24 @@ export default function App() {
       if (table === "students") syncActiveAndArchive(setStudents, "students", normalizeStudent);
       if (table === "teachers") syncActiveAndArchive(setTeachers, "teachers", normalizeTeacher);
       if (table === "courses") syncActiveAndArchive(setCourses, "courses", normalizeCourse);
+      if (table === "enrollments") {
+        if (isDelete) {
+          setEnrollments((prev) => removeById(prev, id));
+          return;
+        }
+        const normalizedEnrollment = normalizeEnrollment(payload.new);
+        if (normalizedEnrollment.archivedAt) {
+          setEnrollments((prev) => removeById(prev, normalizedEnrollment.id));
+          return;
+        }
+        setEnrollments((prev) => upsertById(prev, normalizedEnrollment));
+      }
       if (table === "payments") syncActiveAndArchive(setPayments, "payments", normalizePayment);
       if (table === "expenses") syncActiveAndArchive(setExpenses, "expenses", normalizeExpense);
     };
 
     const channel = supabase.channel("app-data-realtime");
-    ["students", "teachers", "courses", "payments", "expenses"].forEach((table) => {
+    ["students", "teachers", "courses", "enrollments", "payments", "expenses"].forEach((table) => {
       channel.on(
         "postgres_changes",
         { event: "*", schema: "public", table },
@@ -917,13 +1314,15 @@ export default function App() {
     setPayments((prev) => {
       let changed = false;
       const next = prev.map((payment) => {
-        const student = students.find((s) => sameId(s.id, payment.studentId));
-        const fallbackTeacherId = payment.teacherId != null ? payment.teacherId : student?.teacherId != null ? student.teacherId : null;
+        const enrollment = enrollments.find((item) => sameId(item.id, payment.enrollmentId));
+        const student = studentsWithEnrollment.find((s) => sameId(s.id, payment.studentId));
+        const fallbackTeacherId =
+          payment.teacherId != null ? payment.teacherId : enrollment?.teacherId != null ? enrollment.teacherId : student?.teacherId ?? null;
         const teacher = teachers.find((t) => sameId(t.id, fallbackTeacherId));
         const patched = {
           ...payment,
           studentName: payment.studentName || student?.name || "Pa student",
-          teacherId: payment.teacherId != null ? payment.teacherId : student?.teacherId != null ? student.teacherId : null,
+          teacherId: payment.teacherId != null ? payment.teacherId : enrollment?.teacherId != null ? enrollment.teacherId : student?.teacherId ?? null,
           teacherName: payment.teacherName || teacher?.name || "Pa mësues",
         };
         if (
@@ -941,13 +1340,15 @@ export default function App() {
     setArchive((prev) => {
       let changed = false;
       const nextPayments = prev.payments.map((payment) => {
-        const student = students.find((s) => sameId(s.id, payment.studentId));
-        const fallbackTeacherId = payment.teacherId != null ? payment.teacherId : student?.teacherId != null ? student.teacherId : null;
+        const enrollment = enrollments.find((item) => sameId(item.id, payment.enrollmentId));
+        const student = studentsWithEnrollment.find((s) => sameId(s.id, payment.studentId));
+        const fallbackTeacherId =
+          payment.teacherId != null ? payment.teacherId : enrollment?.teacherId != null ? enrollment.teacherId : student?.teacherId ?? null;
         const teacher = teachers.find((t) => sameId(t.id, fallbackTeacherId));
         const patched = {
           ...payment,
           studentName: payment.studentName || student?.name || "Pa student",
-          teacherId: payment.teacherId != null ? payment.teacherId : student?.teacherId != null ? student.teacherId : null,
+          teacherId: payment.teacherId != null ? payment.teacherId : enrollment?.teacherId != null ? enrollment.teacherId : student?.teacherId ?? null,
           teacherName: payment.teacherName || teacher?.name || "Pa mësues",
         };
         if (
@@ -961,7 +1362,7 @@ export default function App() {
       });
       return changed ? { ...prev, payments: nextPayments } : prev;
     });
-  }, [students, teachers, setPayments, setArchive]);
+  }, [studentsWithEnrollment, enrollments, teachers, setPayments, setArchive]);
 
   const addStudent = async () => {
     const firstName = studentForm.firstName.trim();
@@ -977,13 +1378,14 @@ export default function App() {
       phone: studentForm.phone.trim(),
       email: studentForm.email.trim(),
       course: studentForm.course,
-      group: studentForm.group,
+      group: studentForm.group || currentMonthInput(),
       studentGroup: studentForm.studentGroup.trim(),
       teacherId: studentForm.teacherId || null,
     };
 
     try {
       const savedStudent = await insertRow("students", studentToRow(nextStudent), normalizeStudent);
+      await saveEnrollment(buildEnrollmentFromStudent(nextStudent, savedStudent.id));
       setStudents((prev) => [...prev, savedStudent]);
       setStudentForm(emptyStudentForm);
       setIsStudentModalOpen(false);
@@ -1025,7 +1427,7 @@ export default function App() {
             phone: getExcelValue(row, ["Numri i telefonit", "Telefoni", "Phone", "Phone Number"]),
             email: getExcelValue(row, ["Emaili", "Email", "E-mail"]),
             course: getExcelValue(row, ["Kursi", "Course"]),
-            group: getExcelValue(row, ["Muaji", "Month", "Month Year"]),
+            group: parseMonthYear(getExcelValue(row, ["Muaji", "Month", "Month Year"])),
             studentGroup: getExcelValue(row, ["Grupi", "Group", "Student Group"]),
             teacherId: teacher ? teacher.id : null,
           };
@@ -1039,7 +1441,23 @@ export default function App() {
 
       const { data, error } = await supabase.from("students").insert(importedStudents.map(studentToRow)).select();
       if (error) throw error;
-      setStudents((prev) => [...prev, ...(data || []).map(normalizeStudent)]);
+      const savedStudents = (data || []).map(normalizeStudent);
+      const enrollmentRows = savedStudents
+        .map((savedStudent, index) =>
+          enrollmentToRow(
+            buildEnrollmentFromStudent(
+              { ...importedStudents[index], group: importedStudents[index]?.group || currentMonthInput() },
+              savedStudent.id
+            )
+          )
+        )
+        .filter((row) => row.course_name);
+      const savedEnrollmentsResult = enrollmentRows.length
+        ? await supabase.from("enrollments").insert(enrollmentRows).select("*")
+        : { data: [], error: null };
+      if (savedEnrollmentsResult.error) throw savedEnrollmentsResult.error;
+      setStudents((prev) => [...prev, ...savedStudents]);
+      setEnrollments((prev) => [...prev, ...(savedEnrollmentsResult.data || []).map(normalizeEnrollment)]);
       window.alert(`U importuan ${importedStudents.length} nxenes.`);
     } catch (error) {
       reportDataError(error);
@@ -1056,6 +1474,7 @@ export default function App() {
       name: `${firstName} ${lastName}`,
       firstName,
       lastName,
+      email: normalizeEmail(teacherForm.email),
       percent: Number(teacherForm.percent),
     };
     try {
@@ -1112,6 +1531,7 @@ export default function App() {
   };
 
   const openPaymentModal = () => {
+    setPaymentModalTitle("Shto pagesë");
     setSelectedStudent("");
     setPaymentAmount("");
     setPaymentHours("");
@@ -1124,9 +1544,9 @@ export default function App() {
     setIsPaymentModalOpen(true);
   };
 
-  const changePaymentStudent = (studentId) => {
+  const setPaymentDefaultsForStudent = (studentId) => {
     setSelectedStudent(studentId);
-    const student = students.find((s) => sameId(s.id, studentId));
+    const student = studentsWithEnrollment.find((s) => sameId(s.id, studentId));
     const course = student ? getStudentCourse(student) : null;
     const price = student ? getStudentCoursePrice(student) : 0;
     if (isHourlyCourse(course)) {
@@ -1138,6 +1558,16 @@ export default function App() {
     setPaymentHours("");
     setPaymentRate("");
     setPaymentAmount(price ? formatExportCurrency(price) : "");
+  };
+
+  const openPaymentModalForStudent = (student) => {
+    openPaymentModal();
+    setPaymentModalTitle(`Pagesa - ${student.name || "Nxënësi"}`);
+    setPaymentDefaultsForStudent(student.id);
+  };
+
+  const changePaymentStudent = (studentId) => {
+    setPaymentDefaultsForStudent(studentId);
   };
 
   const changePaymentHours = (hours) => {
@@ -1154,7 +1584,7 @@ export default function App() {
 
   const addPayment = async () => {
     if (!paymentAmount || !selectedStudent) return;
-    const student = students.find((s) => sameId(s.id, selectedStudent));
+    const student = studentsWithEnrollment.find((s) => sameId(s.id, selectedStudent));
     const teacher = teachers.find((t) => sameId(t.id, student?.teacherId));
     const course = student ? getStudentCourse(student) : null;
     const isHourly = isHourlyCourse(course);
@@ -1162,6 +1592,11 @@ export default function App() {
       {
         studentId: selectedStudent,
         studentName: student?.name || "Pa student",
+        enrollmentId: student?.enrollmentId || "",
+        courseId: student?.courseId || "",
+        courseName: student?.course || "",
+        groupName: student?.studentGroup || "",
+        paymentMonth: paymentDate ? monthFromDate(paymentDate) : currentPaymentMonth,
         teacherId: student?.teacherId ?? null,
         teacherName: teacher?.name || "Pa mësues",
         amount: parseMoney(paymentAmount),
@@ -1351,6 +1786,113 @@ export default function App() {
     }
   };
 
+  const resetEnrollmentForm = (student = null) => {
+    setEditingEnrollmentId(null);
+    setEnrollmentForm({
+      ...emptyEnrollmentForm,
+      course: student?.course || "",
+      group: currentMonthInput(),
+      studentGroup: student?.studentGroup || "",
+      teacherId: student?.teacherId || "",
+      status: "active",
+    });
+  };
+
+  const openEnrollmentModal = (student) => {
+    setEnrollmentStudentId(student.id);
+    resetEnrollmentForm(student);
+    setIsEnrollmentModalOpen(true);
+  };
+
+  const startEditEnrollment = (enrollment) => {
+    setEditingEnrollmentId(enrollment.id);
+    setEnrollmentForm({
+      course: enrollment.course || "",
+      group: enrollment.group || "",
+      studentGroup: enrollment.studentGroup || "",
+      teacherId: enrollment.teacherId || "",
+      status: enrollment.status || "active",
+      endMonth: enrollment.endMonth || "",
+      note: enrollment.note || "",
+    });
+  };
+
+  const closeOtherActiveEnrollments = async (studentId, exceptEnrollmentId = null, endMonth = currentMonthInput()) => {
+    const rowsToClose = enrollments.filter(
+      (enrollment) =>
+        sameId(enrollment.studentId, studentId) &&
+        enrollment.status === "active" &&
+        !sameId(enrollment.id, exceptEnrollmentId)
+    );
+    if (!rowsToClose.length) return;
+
+    const savedRows = await Promise.all(
+      rowsToClose.map((enrollment) =>
+        updateRow(
+          "enrollments",
+          enrollment.id,
+          enrollmentToRow({
+            ...enrollment,
+            status: "completed",
+            endMonth: enrollment.endMonth || endMonth,
+          }),
+          normalizeEnrollment
+        )
+      )
+    );
+    setEnrollments((prev) =>
+      savedRows.filter(Boolean).reduce((rows, enrollment) => upsertById(rows, enrollment), prev)
+    );
+  };
+
+  const saveEnrollmentForm = async () => {
+    if (!enrollmentStudentId || !enrollmentForm.course) return;
+    const nextEnrollment = {
+      studentId: enrollmentStudentId,
+      course: enrollmentForm.course,
+      group: enrollmentForm.group || currentMonthInput(),
+      studentGroup: enrollmentForm.studentGroup.trim(),
+      teacherId: enrollmentForm.teacherId || null,
+      status: enrollmentForm.status || "active",
+      endMonth: enrollmentForm.status === "active" ? "" : enrollmentForm.endMonth,
+      note: enrollmentForm.note.trim(),
+    };
+
+    try {
+      if (nextEnrollment.status === "active") {
+        await closeOtherActiveEnrollments(enrollmentStudentId, editingEnrollmentId, nextEnrollment.group);
+      }
+      const savedEnrollment = await saveEnrollment(nextEnrollment, editingEnrollmentId);
+      if (savedEnrollment.status === "active") {
+        await updateStudentMirrorFromEnrollment(enrollmentStudentId, savedEnrollment);
+      }
+      const selectedStudent = studentsWithEnrollment.find((student) => sameId(student.id, enrollmentStudentId));
+      resetEnrollmentForm(selectedStudent);
+    } catch (error) {
+      reportDataError(error);
+    }
+  };
+
+  const updateEnrollmentStatus = async (enrollment, status) => {
+    const nextEnrollment = {
+      ...enrollment,
+      status,
+      endMonth: status === "active" ? "" : enrollment.endMonth || currentMonthInput(),
+    };
+
+    try {
+      if (status === "active") {
+        await closeOtherActiveEnrollments(enrollment.studentId, enrollment.id, enrollment.group || currentMonthInput());
+      }
+      const savedEnrollment = await saveEnrollment(nextEnrollment, enrollment.id);
+      if (savedEnrollment.status === "active") {
+        await updateStudentMirrorFromEnrollment(enrollment.studentId, savedEnrollment);
+      }
+    } catch (error) {
+      reportDataError(error);
+    }
+  };
+
   const startEditStudent = (student) => {
     const nameParts = String(student.name || "").split(" ").filter(Boolean);
     setEditingStudentId(student.id);
@@ -1399,6 +1941,7 @@ export default function App() {
     };
     try {
       const savedStudent = await updateRow("students", editingStudentId, studentToRow(nextStudent), normalizeStudent);
+      await saveActiveEnrollmentForStudent(editingStudentId, nextStudent);
       setStudents((prev) => prev.map((student) => (student.id === editingStudentId ? savedStudent || { ...student, ...nextStudent } : student)));
       cancelEditStudent();
     } catch (error) {
@@ -1411,6 +1954,7 @@ export default function App() {
     setEditingTeacherId(teacher.id);
     setEditingTeacherFirstName(teacher.firstName || nameParts[0] || "");
     setEditingTeacherLastName(teacher.lastName || nameParts.slice(1).join(" "));
+    setEditingTeacherEmail(teacher.email || "");
     setEditingTeacherPercent(teacher.percent);
   };
 
@@ -1422,6 +1966,7 @@ export default function App() {
       name: [firstName, lastName].filter(Boolean).join(" "),
       firstName,
       lastName,
+      email: normalizeEmail(editingTeacherEmail),
       percent: Number(editingTeacherPercent),
     };
     try {
@@ -1430,6 +1975,7 @@ export default function App() {
       setEditingTeacherId(null);
       setEditingTeacherFirstName("");
       setEditingTeacherLastName("");
+      setEditingTeacherEmail("");
       setEditingTeacherPercent(80);
     } catch (error) {
       reportDataError(error);
@@ -1441,7 +1987,7 @@ export default function App() {
     setAssignTeacherId(initialTeacherId ? String(initialTeacherId) : "");
     setAssignStudentIds(
       initialTeacherId
-        ? students.filter((student) => sameId(student.teacherId, initialTeacherId)).map((student) => student.id)
+        ? studentsWithEnrollment.filter((student) => sameId(student.teacherId, initialTeacherId)).map((student) => student.id)
         : []
     );
     setIsAssignStudentsModalOpen(true);
@@ -1451,7 +1997,7 @@ export default function App() {
     setAssignTeacherId(teacherId);
     setAssignStudentIds(
       teacherId
-        ? students.filter((student) => sameId(student.teacherId, teacherId)).map((student) => student.id)
+        ? studentsWithEnrollment.filter((student) => sameId(student.teacherId, teacherId)).map((student) => student.id)
         : []
     );
   };
@@ -1465,8 +2011,9 @@ export default function App() {
   const saveAssignedStudents = async () => {
     if (!assignTeacherId) return;
     const nextStudents = students.map((student) => {
+        const currentStudent = studentsWithEnrollment.find((item) => sameId(item.id, student.id)) || student;
         const isSelected = assignStudentIds.some((id) => sameId(id, student.id));
-        const belongsToTeacher = sameId(student.teacherId, assignTeacherId);
+        const belongsToTeacher = sameId(currentStudent.teacherId, assignTeacherId);
 
         if (isSelected) {
           return { ...student, teacherId: assignTeacherId };
@@ -1479,19 +2026,40 @@ export default function App() {
         return student;
       });
     const changedStudents = nextStudents.filter((student) => {
-      const previousStudent = students.find((item) => item.id === student.id);
+      const previousStudent = studentsWithEnrollment.find((item) => sameId(item.id, student.id));
       return String(previousStudent?.teacherId || "") !== String(student.teacherId || "");
     });
 
     try {
-      const results = await Promise.all(
-        changedStudents.map((student) =>
+      const results = await Promise.all([
+        ...changedStudents.map((student) =>
           supabase.from("students").update({ teacher_id: student.teacherId || null }).eq("id", student.id)
-        )
-      );
+        ),
+        ...changedStudents.map((student) => {
+          const currentStudent = studentsWithEnrollment.find((item) => sameId(item.id, student.id)) || student;
+          const existingEnrollment = currentActiveEnrollmentForStudent(student.id) || studentEnrollmentRows(student.id)[0];
+          const nextEnrollment = buildEnrollmentFromStudent(
+            { ...currentStudent, teacherId: student.teacherId || null },
+            student.id,
+            {
+              status: existingEnrollment?.status || "active",
+              endMonth: existingEnrollment?.endMonth || "",
+              note: existingEnrollment?.note || "",
+            }
+          );
+          return existingEnrollment
+            ? supabase.from("enrollments").update(enrollmentToRow(nextEnrollment)).eq("id", existingEnrollment.id).select("*").maybeSingle()
+            : supabase.from("enrollments").insert(enrollmentToRow(nextEnrollment)).select("*").single();
+        }),
+      ]);
       const firstError = results.find((result) => result.error)?.error;
       if (firstError) throw firstError;
+      const savedEnrollments = results
+        .map((result) => result.data)
+        .filter((row) => row?.student_id)
+        .map(normalizeEnrollment);
       setStudents(nextStudents);
+      setEnrollments((prev) => savedEnrollments.reduce((rows, enrollment) => upsertById(rows, enrollment), prev));
       setSelectedTeacherView(assignTeacherId);
       setIsAssignStudentsModalOpen(false);
     } catch (error) {
@@ -1512,7 +2080,7 @@ export default function App() {
 
   const saveEditPayment = async () => {
     if (!editingPaymentAmount || !editingPaymentStudentId || !editingPaymentDate) return;
-    const student = students.find((s) => sameId(s.id, editingPaymentStudentId));
+    const student = studentsWithEnrollment.find((s) => sameId(s.id, editingPaymentStudentId));
     const teacher = teachers.find((t) => sameId(t.id, student?.teacherId));
     const existingPayment = payments.find((payment) => payment.id === editingPaymentId);
     const isHourly = editingPaymentType === "hourly";
@@ -1521,6 +2089,11 @@ export default function App() {
         amount: parseMoney(editingPaymentAmount),
         studentId: editingPaymentStudentId,
         studentName: student?.name || existingPayment?.studentName || "Pa student",
+        enrollmentId: student?.enrollmentId || existingPayment?.enrollmentId || "",
+        courseId: student?.courseId || existingPayment?.courseId || "",
+        courseName: student?.course || existingPayment?.courseName || "",
+        groupName: student?.studentGroup || existingPayment?.groupName || "",
+        paymentMonth: monthFromDate(editingPaymentDate),
         teacherId: student?.teacherId ?? null,
         teacherName: teacher?.name || existingPayment?.teacherName || "Pa mësues",
         teacherPercent: existingPayment?.teacherPercent ?? 80,
@@ -1562,7 +2135,7 @@ export default function App() {
 
   const changeEditingPaymentStudent = (studentId) => {
     setEditingPaymentStudentId(studentId);
-    const student = students.find((s) => sameId(s.id, studentId));
+    const student = studentsWithEnrollment.find((s) => sameId(s.id, studentId));
     const course = student ? getStudentCourse(student) : null;
     const price = student ? getStudentCoursePrice(student) : 0;
     if (isHourlyCourse(course)) {
@@ -1580,7 +2153,7 @@ export default function App() {
 
   const currentPaymentMonth = monthFromDate(new Date().toISOString());
 
-  const getStudentCourse = (student) => courses.find((course) => course.name === student.course);
+  const getStudentCourse = (student) => courses.find((course) => sameId(course.id, student.courseId) || course.name === student.course);
   const getStudentCoursePrice = (student) => Number(getStudentCourse(student)?.price || 0);
   const getStudentCurrentPayments = (student) =>
     payments.filter(
@@ -1592,61 +2165,24 @@ export default function App() {
   const paymentTeacherPercentValue = (payment, teacher) => Number(payment.teacherPercent ?? teacher?.percent ?? 80);
   const paymentAdminPercentValue = (payment) => Number(payment.adminPercent ?? 15);
   const paymentSchoolPercentValue = (payment) => Number(payment.schoolPercent ?? 5);
+  const paymentEnrollment = useCallback(
+    (payment) => enrollments.find((enrollment) => sameId(enrollment.id, payment.enrollmentId)),
+    [enrollments]
+  );
+  const paymentStudent = useCallback(
+    (payment) => studentsWithEnrollment.find((student) => sameId(student.id, payment.studentId)),
+    [studentsWithEnrollment]
+  );
+  const paymentTeacherId = useCallback(
+    (payment) => payment.teacherId ?? paymentEnrollment(payment)?.teacherId ?? paymentStudent(payment)?.teacherId ?? null,
+    [paymentEnrollment, paymentStudent]
+  );
+  const paymentTeacher = useCallback(
+    (payment) => teachers.find((teacher) => sameId(teacher.id, paymentTeacherId(payment))),
+    [paymentTeacherId, teachers]
+  );
 
-  const toggleStudentPayment = async (student) => {
-    if (hasStudentCurrentPayment(student)) {
-      const currentPayments = getStudentCurrentPayments(student);
-      try {
-        await Promise.all(currentPayments.map((payment) => deleteRow("payments", payment.id)));
-        setPayments((prev) =>
-          prev.filter(
-            (payment) =>
-              !sameId(payment.studentId, student.id) ||
-              monthFromDate(payment.date) !== currentPaymentMonth
-          )
-        );
-      } catch (error) {
-        reportDataError(error);
-      }
-      return;
-    }
-
-    const course = getStudentCourse(student);
-    if (!course) {
-      window.alert("Ky kurs nuk ka cmim te caktuar te Kurset.");
-      return;
-    }
-
-    if (isHourlyCourse(course)) {
-      window.alert("Ky nxenes eshte individual. Shto pagesen nga tab Pagesat dhe shkruaj oret.");
-      return;
-    }
-
-    const teacher = teachers.find((t) => sameId(t.id, student.teacherId));
-    const nextPayment = {
-      studentId: student.id,
-      studentName: student.name || "Pa student",
-      teacherId: student.teacherId ?? null,
-      teacherName: teacher?.name || "Pa mesues",
-      amount: getStudentCoursePrice(student),
-      teacherPercent: 80,
-      adminPercent: 15,
-      schoolPercent: 5,
-      paymentType: "fixed",
-      hours: "",
-      rate: "",
-      note: "",
-      date: new Date().toISOString(),
-    };
-    try {
-      const savedPayment = await insertRow("payments", paymentToRow(nextPayment), normalizePayment);
-      setPayments((prev) => [...prev, savedPayment]);
-    } catch (error) {
-      reportDataError(error);
-    }
-  };
-
-  const filteredStudents = students.filter((student) => {
+  const filteredStudents = studentsWithEnrollment.filter((student) => {
     const teacher = teachers.find((t) => sameId(t.id, student.teacherId));
     const q = studentSearch.trim().toLowerCase();
     if (!q) return true;
@@ -1661,6 +2197,7 @@ export default function App() {
       student.course,
       formatMonthYear(student.group),
       student.studentGroup,
+      enrollmentStatusLabel(student.enrollmentStatus),
       teacher?.name,
     ].some((value) => String(value || "").toLowerCase().includes(q));
   });
@@ -1668,7 +2205,7 @@ export default function App() {
     studentGroupFilter ? student.group === studentGroupFilter : true
   );
 
-  const selectedTeacherStudents = students.filter((student) => {
+  const selectedTeacherStudents = studentsWithEnrollment.filter((student) => {
     const matchesTeacher = sameId(student.teacherId, selectedTeacherView);
     const matchesMonth = teacherMonthFilter ? student.group === teacherMonthFilter : true;
     return matchesTeacher && matchesMonth;
@@ -1684,15 +2221,21 @@ export default function App() {
 
   const activePaymentTeacherFilter = paymentTeacherFilter && teachers.some((t) => t.name === paymentTeacherFilter) ? paymentTeacherFilter : "";
   const activeFinanceTeacherFilter = financeTeacherFilter && teachers.some((t) => t.name === financeTeacherFilter) ? financeTeacherFilter : "";
+  const paymentsForCurrentUser = useMemo(() => {
+    if (!isTeacherUser) return payments;
+    return payments.filter((payment) => sameId(paymentTeacherId(payment), currentTeacherId));
+  }, [currentTeacherId, isTeacherUser, payments, paymentTeacherId]);
 
-  const enrichedPayments = payments.map((payment) => {
-    const student = students.find((s) => sameId(s.id, payment.studentId));
-    const fallbackTeacherId = payment.teacherId != null ? payment.teacherId : student?.teacherId != null ? student.teacherId : null;
-    const teacher = teachers.find((t) => sameId(t.id, fallbackTeacherId));
+  const enrichedPayments = paymentsForCurrentUser.map((payment) => {
+    const student = paymentStudent(payment);
+    const enrollment = paymentEnrollment(payment);
+    const teacher = paymentTeacher(payment);
     return {
       ...payment,
       studentName: payment.studentName || student?.name || "Pa student",
       teacherName: payment.teacherName || teacher?.name || "Pa mësues",
+      courseName: payment.courseName || enrollment?.course || student?.course || "",
+      groupName: payment.groupName || enrollment?.studentGroup || student?.studentGroup || "",
       month: monthFromDate(payment.date),
     };
   });
@@ -1711,7 +2254,8 @@ export default function App() {
         formatDateDisplay(payment.date).includes(q);
 
     const matchesTeacher = !activePaymentTeacherFilter ? true : payment.teacherName === activePaymentTeacherFilter;
-    return matchesSearch && matchesTeacher;
+    const matchesMonth = paymentMonthFilter ? monthFromDate(payment.date) === paymentMonthFilter : true;
+    return matchesSearch && matchesTeacher && matchesMonth;
   });
 
   const filteredExpenses = expenses.filter((expense) => {
@@ -1726,15 +2270,15 @@ export default function App() {
 
   const teacherEarnings = useMemo(() => {
     return teachers
-      .filter((teacher) => !activeFinanceTeacherFilter || teacher.name === activeFinanceTeacherFilter)
+      .filter((teacher) => (isTeacherUser ? sameId(teacher.id, currentTeacherId) : !activeFinanceTeacherFilter || teacher.name === activeFinanceTeacherFilter))
       .map((teacher) => {
-        const teacherStudents = students.filter((student) => sameId(student.teacherId, teacher.id));
-        const teacherStudentIds = teacherStudents.map((student) => student.id);
-        const relevantPayments = payments.filter((payment) => {
-          const sameTeacher = teacherStudentIds.some((studentId) => sameId(studentId, payment.studentId));
+        const teacherStudents = studentsWithEnrollment.filter((student) => sameId(student.teacherId, teacher.id));
+        const relevantPayments = paymentsForCurrentUser.filter((payment) => {
+          const sameTeacher = sameId(paymentTeacherId(payment), teacher.id);
           const sameMonth = financeMonth ? monthFromDate(payment.date) === financeMonth : true;
           return sameTeacher && sameMonth;
         });
+        const notes = [...new Set(relevantPayments.map((payment) => payment.note).filter(Boolean))].join("; ");
 
         const total = relevantPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
         const teacherShare = relevantPayments.reduce(
@@ -1759,15 +2303,12 @@ export default function App() {
           adminShare,
           schoolShare,
           remainingShare,
+          notes,
         };
       });
-  }, [teachers, students, payments, financeMonth, activeFinanceTeacherFilter]);
+  }, [teachers, studentsWithEnrollment, paymentsForCurrentUser, financeMonth, activeFinanceTeacherFilter, isTeacherUser, currentTeacherId, paymentTeacherId]);
 
   const allTimeIncomeOverview = useMemo(() => {
-    const paymentTeacherId = (payment) => {
-      if (payment.teacherId != null) return payment.teacherId;
-      return students.find((student) => sameId(student.id, payment.studentId))?.teacherId ?? null;
-    };
     const totalIncome = payments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
     const totalAdminShare = payments.reduce(
       (sum, payment) => sum + Number(payment.amount || 0) * (paymentAdminPercentValue(payment) / 100),
@@ -1797,7 +2338,7 @@ export default function App() {
       totalSchoolShare,
       teacherRows,
     };
-  }, [payments, students, teachers]);
+  }, [payments, teachers, paymentTeacherId]);
 
   const filteredArchiveStudents = archive.students.filter((student) => {
     const q = archiveSearch.trim().toLowerCase();
@@ -1817,7 +2358,7 @@ export default function App() {
 
   const filteredArchiveTeachers = archive.teachers.filter((teacher) => {
     const q = archiveSearch.trim().toLowerCase();
-    return !q || teacher.name.toLowerCase().includes(q);
+    return !q || teacher.name.toLowerCase().includes(q) || (teacher.email || "").toLowerCase().includes(q);
   });
 
   const filteredArchivePayments = archive.payments.filter((payment) => {
@@ -1858,12 +2399,13 @@ export default function App() {
     course: (student) => student.course,
     group: (student) => student.group,
     studentGroup: (student) => student.studentGroup,
-    teacherName: (student) => teachers.find((teacher) => sameId(teacher.id, student.teacherId))?.name || "Pa mesues",
+    status: (student) => enrollmentStatusLabel(student.enrollmentStatus),
+    teacherName: (student) => student.teacherName || teachers.find((teacher) => sameId(teacher.id, student.teacherId))?.name || "Pa mesues",
     payment: (student) => (hasStudentCurrentPayment(student) ? 1 : 0),
   });
 
   const teacherStudentsForMonth = (teacherId) =>
-    students.filter(
+    studentsWithEnrollment.filter(
       (student) => sameId(student.teacherId, teacherId) && (!teacherMonthFilter || student.group === teacherMonthFilter)
     );
 
@@ -1875,6 +2417,7 @@ export default function App() {
       teacher.name.toLowerCase().includes(q) ||
       (teacher.firstName || "").toLowerCase().includes(q) ||
       (teacher.lastName || "").toLowerCase().includes(q) ||
+      (teacher.email || "").toLowerCase().includes(q) ||
       String(teacher.percent).includes(q) ||
       String(teacherStudents.length).includes(q)
     );
@@ -1884,6 +2427,7 @@ export default function App() {
     nr: (_teacher, index) => index + 1,
     name: (teacher) => teacher.firstName || teacher.name,
     lastName: (teacher) => teacher.lastName,
+    email: (teacher) => teacher.email,
     studentsCount: (teacher) => teacherStudentsForMonth(teacher.id).length,
   });
 
@@ -1913,9 +2457,9 @@ export default function App() {
 
     const rowsByStudent = new Map();
     payments.forEach((payment) => {
-      const student = students.find((item) => sameId(item.id, payment.studentId));
-      const teacherId = payment.teacherId ?? student?.teacherId;
-      if (!sameId(teacherId, selectedPagaTeacherView)) return;
+      const student = paymentStudent(payment);
+      const enrollment = paymentEnrollment(payment);
+      if (!sameId(paymentTeacherId(payment), selectedPagaTeacherView)) return;
       if (financeMonth && monthFromDate(payment.date) !== financeMonth) return;
 
       const key = payment.studentId || payment.studentName || payment.id;
@@ -1925,7 +2469,7 @@ export default function App() {
         id: key,
         firstName: student?.firstName || nameParts[0] || payment.studentName || "Pa student",
         lastName: student?.lastName || nameParts.slice(1).join(" "),
-        course: student?.course || "-",
+        course: payment.courseName || enrollment?.course || student?.course || "-",
         amount: Number(existingRow?.amount || 0) + Number(payment.amount || 0),
       });
     });
@@ -1934,14 +2478,14 @@ export default function App() {
       const firstNameSort = a.firstName.localeCompare(b.firstName, undefined, { sensitivity: "base" });
       return firstNameSort || a.lastName.localeCompare(b.lastName, undefined, { sensitivity: "base" });
     });
-  }, [financeMonth, payments, selectedPagaTeacherView, students]);
+  }, [financeMonth, payments, selectedPagaTeacherView, paymentStudent, paymentEnrollment, paymentTeacherId]);
 
-  const financePaymentRows = payments
+  const financePaymentRows = paymentsForCurrentUser
     .map((payment) => {
-      const student = students.find((item) => sameId(item.id, payment.studentId));
-      const fallbackTeacherId = payment.teacherId != null ? payment.teacherId : student?.teacherId;
-      const teacher = teachers.find((item) => sameId(item.id, fallbackTeacherId));
+      const student = paymentStudent(payment);
+      const teacher = paymentTeacher(payment);
       if (!teacher) return null;
+      if (isTeacherUser && !sameId(teacher.id, currentTeacherId)) return null;
       if (financeMonth && monthFromDate(payment.date) !== financeMonth) return null;
       if (activeFinanceTeacherFilter && teacher.name !== activeFinanceTeacherFilter) return null;
 
@@ -1958,14 +2502,21 @@ export default function App() {
     });
 
   const financeExportTotal = financePaymentRows.reduce((sum, row) => sum + row.teacherPayment, 0);
-  const overviewPayments = payments.filter((payment) => monthFromDate(payment.date) === financeOverviewMonth);
+  const financeExportTeacherName = isTeacherUser ? currentTeacherAccount?.name || "" : activeFinanceTeacherFilter;
+  const overviewPayments = payments.filter((payment) => (financeOverviewMonth ? monthFromDate(payment.date) === financeOverviewMonth : true));
   const overviewIncome = overviewPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
   const overviewTeacherPay = overviewPayments.reduce((sum, payment) => {
-    const student = students.find((item) => sameId(item.id, payment.studentId));
-    const fallbackTeacherId = payment.teacherId != null ? payment.teacherId : student?.teacherId;
-    const teacher = teachers.find((item) => sameId(item.id, fallbackTeacherId));
+    const teacher = paymentTeacher(payment);
     return sum + Number(payment.amount || 0) * (paymentTeacherPercentValue(payment, teacher) / 100);
   }, 0);
+  const overviewAdminShare = overviewPayments.reduce(
+    (sum, payment) => sum + Number(payment.amount || 0) * (paymentAdminPercentValue(payment) / 100),
+    0
+  );
+  const overviewSchoolShare = overviewPayments.reduce(
+    (sum, payment) => sum + Number(payment.amount || 0) * (paymentSchoolPercentValue(payment) / 100),
+    0
+  );
   const overviewExpenses = expenses
     .filter((expense) => monthFromDate(expense.date) === financeOverviewMonth)
     .reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
@@ -2115,9 +2666,9 @@ export default function App() {
   };
 
   const buildFinanceExportRows = (note = "") => [
-    ...(activeFinanceTeacherFilter
+    ...(financeExportTeacherName
       ? [
-          [activeFinanceTeacherFilter, "", ""],
+          [financeExportTeacherName, "", ""],
           ["Nxënësi", "Pagesa", "Shenime"],
           ...financePaymentRows.map((row) => [row.studentName, formatExportCurrency(row.teacherPayment), note]),
           ["", formatExportCurrency(financeExportTotal), ""],
@@ -2133,11 +2684,11 @@ export default function App() {
     const rows = buildFinanceExportRows(note);
     const tableRows = rows
       .map((row, rowIndex) => {
-        if (activeFinanceTeacherFilter && rowIndex === 0) {
+        if (financeExportTeacherName && rowIndex === 0) {
           return `<tr><td colspan="2" class="first-row merged">${escapeHtml(row[0])}</td><td></td></tr>`;
         }
 
-        const cellTag = rowIndex === 0 || (activeFinanceTeacherFilter && rowIndex === 1) ? "th" : "td";
+        const cellTag = rowIndex === 0 || (financeExportTeacherName && rowIndex === 1) ? "th" : "td";
         return `<tr>${row.map((cell) => `<${cellTag}>${escapeHtml(cell)}</${cellTag}>`).join("")}</tr>`;
       })
       .join("");
@@ -2158,7 +2709,7 @@ export default function App() {
     const blob = new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
-    const suffix = activeFinanceTeacherFilter ? activeFinanceTeacherFilter.replace(/\s+/g, "_") : "te_gjithe";
+    const suffix = financeExportTeacherName ? financeExportTeacherName.replace(/\s+/g, "_") : "te_gjithe";
     link.href = url;
     link.download = `financa_${suffix}.xls`;
     link.click();
@@ -2167,11 +2718,11 @@ export default function App() {
 
   const exportFinancePdf = (note = "") => {
     const doc = new jsPDF({ orientation: "landscape" });
-    const title = activeFinanceTeacherFilter ? `Financa - ${activeFinanceTeacherFilter}` : "Financa - Te gjithe mesuesit";
+    const title = financeExportTeacherName ? `Financa - ${financeExportTeacherName}` : "Financa - Te gjithe mesuesit";
     doc.setFontSize(14);
     doc.text(title, 14, 15);
 
-    if (activeFinanceTeacherFilter) {
+    if (financeExportTeacherName) {
       autoTable(doc, {
         startY: 22,
         theme: "grid",
@@ -2179,7 +2730,7 @@ export default function App() {
         styles: { lineColor: [0, 0, 0], lineWidth: 0.1 },
         headStyles: { fontStyle: "bold" },
         head: [
-          [{ content: activeFinanceTeacherFilter, colSpan: 3, styles: { fontStyle: "bold", halign: "center" } }],
+          [{ content: financeExportTeacherName, colSpan: 3, styles: { fontStyle: "bold", halign: "center" } }],
           ["Nxënësi", "Pagesa", "Shenime"],
         ],
         body: [
@@ -2202,7 +2753,7 @@ export default function App() {
       });
     }
 
-    const suffix = activeFinanceTeacherFilter ? activeFinanceTeacherFilter.replace(/\s+/g, "_") : "te_gjithe";
+    const suffix = financeExportTeacherName ? financeExportTeacherName.replace(/\s+/g, "_") : "te_gjithe";
     doc.save(`financa_${suffix}.pdf`);
   };
 
@@ -2268,11 +2819,7 @@ export default function App() {
   const exportAllData = () => {
     const workbook = XLSX.utils.book_new();
     const teacherById = (id) => teachers.find((teacher) => sameId(teacher.id, id));
-    const studentById = (id) => students.find((student) => sameId(student.id, id));
-    const paymentTeacher = (payment) => {
-      const fallbackStudent = studentById(payment.studentId);
-      return teacherById(payment.teacherId ?? fallbackStudent?.teacherId);
-    };
+    const studentById = (id) => studentsWithEnrollment.find((student) => sameId(student.id, id));
     const allTimeTeacherRows = teachers.map((teacher, index) => {
       const teacherPayments = payments.filter((payment) => sameId(paymentTeacher(payment)?.id, teacher.id));
       const total = teacherPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
@@ -2293,8 +2840,9 @@ export default function App() {
         index + 1,
         teacher.firstName || teacher.name,
         teacher.lastName || "",
+        teacher.email || "",
         `${teacher.percent}%`,
-        students.filter((student) => sameId(student.teacherId, teacher.id)).length,
+        studentsWithEnrollment.filter((student) => sameId(student.teacherId, teacher.id)).length,
         formatExportCurrency(total),
         formatExportCurrency(teacherShare),
         formatExportCurrency(adminShare),
@@ -2308,8 +2856,8 @@ export default function App() {
       {
         name: "Nxenesit",
         rows: [
-          ["Nr", "Emri", "Mbiemri", "Mosha", "Qyteti", "Telefoni", "Emaili", "Kursi", "Muaji", "Grupi", "Mesuesi", "Pagesa"],
-          ...students.map((student, index) => {
+          ["Nr", "Emri", "Mbiemri", "Mosha", "Qyteti", "Telefoni", "Emaili", "Kursi", "Muaji", "Grupi", "Statusi", "Mesuesi", "Pagesa"],
+          ...studentsWithEnrollment.map((student, index) => {
             const teacher = teacherById(student.teacherId);
             return [
               index + 1,
@@ -2322,6 +2870,7 @@ export default function App() {
               student.course || "",
               formatMonthYear(student.group),
               student.studentGroup || "",
+              enrollmentStatusLabel(student.enrollmentStatus),
               teacher?.name || "Pa mesues",
               hasStudentCurrentPayment(student) ? "E paguar" : "Pa paguar",
             ];
@@ -2331,14 +2880,36 @@ export default function App() {
       {
         name: "Mesuesit",
         rows: [
-          ["Nr", "Emri", "Mbiemri", "Perqindja", "Nxenes"],
+          ["Nr", "Emri", "Mbiemri", "Email", "Perqindja", "Nxenes"],
           ...teachers.map((teacher, index) => [
             index + 1,
             teacher.firstName || teacher.name,
             teacher.lastName || "",
+            teacher.email || "",
             `${teacher.percent}%`,
-            students.filter((student) => sameId(student.teacherId, teacher.id)).length,
+            studentsWithEnrollment.filter((student) => sameId(student.teacherId, teacher.id)).length,
           ]),
+        ],
+      },
+      {
+        name: "Regjistrimet",
+        rows: [
+          ["Nr", "Nxenesi", "Kursi", "Muaji", "Grupi", "Mesuesi", "Statusi", "Deri", "Shenime"],
+          ...enrollments.map((enrollment, index) => {
+            const student = studentById(enrollment.studentId);
+            const teacher = teacherById(enrollment.teacherId);
+            return [
+              index + 1,
+              student?.name || "Pa student",
+              enrollment.course || "",
+              formatMonthYear(enrollment.group),
+              enrollment.studentGroup || "",
+              teacher?.name || enrollment.teacherName || "Pa mesues",
+              enrollmentStatusLabel(enrollment.status),
+              formatMonthYear(enrollment.endMonth),
+              enrollment.note || "",
+            ];
+          }),
         ],
       },
       {
@@ -2363,7 +2934,7 @@ export default function App() {
       {
         name: "Paga",
         rows: [
-          ["Nr", "Emri", "Mbiemri", "%", "Nxenes", "Total", "Mesuesi", "Administrata", "Shkolla", "Mbetja"],
+          ["Nr", "Emri", "Mbiemri", "Email", "%", "Nxenes", "Total", "Mesuesi", "Administrata", "Shkolla", "Mbetja"],
           ...allTimeTeacherRows,
         ],
       },
@@ -2372,12 +2943,25 @@ export default function App() {
         rows: [
           ["Kategoria", "Totali"],
           ["Te gjitha te hyrat", formatExportCurrency(allTimeIncomeOverview.totalIncome)],
-          ["Paga mesuesve", formatExportCurrency(allTimeTeacherRows.reduce((sum, row) => sum + parseMoney(row[6]), 0))],
+          ["Paga mesuesve", formatExportCurrency(allTimeTeacherRows.reduce((sum, row) => sum + parseMoney(row[7]), 0))],
           ["Administrata", formatExportCurrency(allTimeIncomeOverview.totalAdminShare)],
           ["Shkolla", formatExportCurrency(allTimeIncomeOverview.totalSchoolShare)],
           ["Shpenzime", formatExportCurrency(totalExpenses)],
           ["Te mbetura", formatExportCurrency(allTimeIncomeOverview.totalSchoolShare - totalExpenses)],
           [],
+          ["Nr", "Produkti / Shpenzimi", "Data", "Cmimi", "Shenime"],
+          ...expenses.map((expense, index) => [
+            index + 1,
+            expense.name,
+            formatDateDisplay(expense.date),
+            formatExportCurrency(expense.amount),
+            expense.note || "",
+          ]),
+        ],
+      },
+      {
+        name: "Shpenzime",
+        rows: [
           ["Nr", "Produkti / Shpenzimi", "Data", "Cmimi", "Shenime"],
           ...expenses.map((expense, index) => [
             index + 1,
@@ -2413,11 +2997,12 @@ export default function App() {
       {
         name: "Archive Mesues",
         rows: [
-          ["Nr", "Emri", "Mbiemri", "Perqindja"],
+          ["Nr", "Emri", "Mbiemri", "Email", "Perqindja"],
           ...archive.teachers.map((teacher, index) => [
             index + 1,
             teacher.firstName || teacher.name,
             teacher.lastName || "",
+            teacher.email || "",
             `${teacher.percent}%`,
           ]),
         ],
@@ -2460,18 +3045,323 @@ export default function App() {
       },
     ];
 
-    sheets.forEach((sheet) => {
+    const months = [...new Set([
+      ...payments.map((payment) => monthFromDate(payment.date)),
+      ...expenses.map((expense) => monthFromDate(expense.date)),
+      ...enrollments.map((enrollment) => enrollment.group),
+    ].filter(Boolean))].sort();
+    const monthlySheets = months.flatMap((month) => {
+      const monthPayments = payments.filter((payment) => monthFromDate(payment.date) === month);
+      const monthExpenses = expenses.filter((expense) => monthFromDate(expense.date) === month);
+      const monthTeacherRows = teachers.map((teacher, index) => {
+        const teacherPayments = monthPayments.filter((payment) => sameId(paymentTeacher(payment)?.id, teacher.id));
+        const total = teacherPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+        const teacherShare = teacherPayments.reduce(
+          (sum, payment) => sum + Number(payment.amount || 0) * (paymentTeacherPercentValue(payment, teacher) / 100),
+          0
+        );
+        const adminShare = teacherPayments.reduce(
+          (sum, payment) => sum + Number(payment.amount || 0) * (paymentAdminPercentValue(payment) / 100),
+          0
+        );
+        const schoolShare = teacherPayments.reduce(
+          (sum, payment) => sum + Number(payment.amount || 0) * (paymentSchoolPercentValue(payment) / 100),
+          0
+        );
+        return [
+          index + 1,
+          teacher.firstName || teacher.name,
+          teacher.lastName || "",
+          teacher.email || "",
+          `${teacher.percent}%`,
+          studentsWithEnrollment.filter((student) => sameId(student.teacherId, teacher.id) && student.group === month).length,
+          formatExportCurrency(total),
+          formatExportCurrency(teacherShare),
+          formatExportCurrency(adminShare),
+          formatExportCurrency(schoolShare),
+          formatExportCurrency(total - teacherShare - adminShare - schoolShare),
+        ];
+      });
+      const monthIncome = monthPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+      const monthTeacherPay = monthTeacherRows.reduce((sum, row) => sum + parseMoney(row[7]), 0);
+      const monthAdminShare = monthPayments.reduce(
+        (sum, payment) => sum + Number(payment.amount || 0) * (paymentAdminPercentValue(payment) / 100),
+        0
+      );
+      const monthSchoolShare = monthPayments.reduce(
+        (sum, payment) => sum + Number(payment.amount || 0) * (paymentSchoolPercentValue(payment) / 100),
+        0
+      );
+      const monthExpenseTotal = monthExpenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
+
+      return [
+        {
+          name: `Pagesat ${month}`,
+          rows: [
+            ["Nr", "Nxenesi", "Mesuesi", "Shuma", "Oret", "Cmimi/ore", "Data", "Mesuesi %", "Administrata %", "Shkolla %", "Shenime"],
+            ...monthPayments.map((payment, index) => [
+              index + 1,
+              payment.studentName || studentById(payment.studentId)?.name || "Pa student",
+              payment.teacherName || paymentTeacher(payment)?.name || "Pa mesues",
+              formatExportCurrency(payment.amount),
+              payment.paymentType === "hourly" ? payment.hours || "" : "",
+              payment.paymentType === "hourly" ? formatExportCurrency(payment.rate) : "",
+              formatDateDisplay(payment.date),
+              `${paymentTeacherPercentValue(payment, paymentTeacher(payment))}%`,
+              `${paymentAdminPercentValue(payment)}%`,
+              `${paymentSchoolPercentValue(payment)}%`,
+              payment.note || "",
+            ]),
+          ],
+        },
+        {
+          name: `Paga ${month}`,
+          rows: [
+            ["Nr", "Emri", "Mbiemri", "Email", "%", "Nxenes", "Total", "Mesuesi", "Administrata", "Shkolla", "Mbetja"],
+            ...monthTeacherRows,
+          ],
+        },
+        {
+          name: `Financa ${month}`,
+          rows: [
+            ["Kategoria", "Totali"],
+            ["Te hyrat totale", formatExportCurrency(monthIncome)],
+            ["Pagat e mesuesve", formatExportCurrency(monthTeacherPay)],
+            ["Administrata", formatExportCurrency(monthAdminShare)],
+            ["Shkolla", formatExportCurrency(monthSchoolShare)],
+            ["Buxheti i shkolles", formatExportCurrency(monthSchoolShare - monthExpenseTotal)],
+            ["Shpenzimet", formatExportCurrency(monthExpenseTotal)],
+          ],
+        },
+        {
+          name: `Shpenzime ${month}`,
+          rows: [
+            ["Nr", "Produkti / Shpenzimi", "Data", "Cmimi", "Shenime"],
+            ...monthExpenses.map((expense, index) => [
+              index + 1,
+              expense.name,
+              formatDateDisplay(expense.date),
+              formatExportCurrency(expense.amount),
+              expense.note || "",
+            ]),
+          ],
+        },
+      ];
+    });
+
+    [...sheets, ...monthlySheets].forEach((sheet) => {
       XLSX.utils.book_append_sheet(workbook, sheetFromRows(sheet.rows), sheet.name);
     });
     XLSX.writeFile(workbook, `vatra_export_${currentDateInput()}.xlsx`);
   };
 
-  const selectedPaymentStudentDetails = students.find((student) => sameId(student.id, selectedStudent));
+  const importAllData = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file || !canManageData) return;
+
+    try {
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
+      const archivedAt = new Date().toISOString();
+      const teacherRows = [
+        ...getWorkbookRows(workbook, ["Mesuesit", "Mësuesit"]).map((row) => ({ row, archivedAt: null })),
+        ...getWorkbookRows(workbook, ["Archive Mesues", "Archive Mësues"]).map((row) => ({ row, archivedAt })),
+      ];
+      const courseRows = [
+        ...getWorkbookRows(workbook, ["Kurset"]).map((row) => ({ row, archivedAt: null })),
+        ...getWorkbookRows(workbook, ["Archive Kurse"]).map((row) => ({ row, archivedAt })),
+      ];
+
+      const teachersToImport = teacherRows
+        .map(({ row, archivedAt: rowArchivedAt }) => {
+          const firstName = getExcelValue(row, ["Emri"]);
+          const lastName = getExcelValue(row, ["Mbiemri"]);
+          const percent = parseMoney(getExcelValue(row, ["Perqindja", "Përqindja", "%"])) || 80;
+          if (!firstName && !lastName) return null;
+          const teacher = {
+            name: [firstName, lastName].filter(Boolean).join(" "),
+            firstName,
+            lastName,
+            email: normalizeEmail(getExcelValue(row, ["Email", "Emaili", "Emaili i mesuesit", "Emaili i mësuesit"])),
+            percent,
+          };
+          return { ...teacherToRow(teacher), archived_at: rowArchivedAt };
+        })
+        .filter(Boolean);
+
+      const coursesToImport = courseRows
+        .map(({ row, archivedAt: rowArchivedAt }) => {
+          const name = getExcelValue(row, ["Emri i kursit", "Kursi", "Emri"]);
+          const typeLabel = normalizeExcelKey(getExcelValue(row, ["Lloji", "Tipi"]));
+          const price = parseMoney(getExcelValue(row, ["Cmimi", "Çmimi", "Price"]));
+          if (!name) return null;
+          return {
+            ...courseToRow({
+              name,
+              price,
+              pricingType: typeLabel.includes("meore") || typeLabel.includes("hour") ? "hourly" : "fixed",
+            }),
+            archived_at: rowArchivedAt,
+          };
+        })
+        .filter(Boolean);
+
+      const [savedTeachersResult, savedCoursesResult] = await Promise.all([
+        teachersToImport.length ? supabase.from("teachers").insert(teachersToImport).select("*") : { data: [], error: null },
+        coursesToImport.length ? supabase.from("courses").insert(coursesToImport).select("*") : { data: [], error: null },
+      ]);
+      if (savedTeachersResult.error) throw savedTeachersResult.error;
+      if (savedCoursesResult.error) throw savedCoursesResult.error;
+
+      const importedTeachers = (savedTeachersResult.data || []).map(normalizeTeacher);
+      const teacherLookup = [...teachers, ...importedTeachers];
+      const teacherByName = (name) =>
+        teacherLookup.find((teacher) => normalizeExcelKey(teacher.name) === normalizeExcelKey(name));
+
+      const studentRows = [
+        ...getWorkbookRows(workbook, ["Nxenesit", "Nxënësit"]).map((row) => ({ row, archivedAt: null })),
+        ...getWorkbookRows(workbook, ["Archive Nxenes", "Archive Nxënës"]).map((row) => ({ row, archivedAt })),
+      ];
+      const studentsToImport = studentRows
+        .map(({ row, archivedAt: rowArchivedAt }) => {
+          const firstName = getExcelValue(row, ["Emri"]);
+          const lastName = getExcelValue(row, ["Mbiemri"]);
+          const fullName = getExcelValue(row, ["Nxenesi", "Nxënësi", "Emri Mbiemri"]);
+          const nameParts = fullName.split(" ").filter(Boolean);
+          const finalFirstName = firstName || nameParts[0] || "";
+          const finalLastName = lastName || nameParts.slice(1).join(" ");
+          const name = [finalFirstName, finalLastName].filter(Boolean).join(" ");
+          if (!name) return null;
+          const teacher = teacherByName(getExcelValue(row, ["Mesuesi", "Mësuesi", "Teacher"]));
+          const student = {
+            name,
+            firstName: finalFirstName,
+            lastName: finalLastName,
+            age: getExcelValue(row, ["Mosha", "Age"]),
+            city: getExcelValue(row, ["Qyteti", "City"]),
+            phone: getExcelValue(row, ["Telefoni", "Numri i telefonit", "Phone"]),
+            email: getExcelValue(row, ["Emaili", "Email"]),
+            course: getExcelValue(row, ["Kursi", "Course"]),
+            group: parseMonthYear(getExcelValue(row, ["Muaji", "Month"])),
+            studentGroup: getExcelValue(row, ["Grupi", "Group"]),
+            teacherId: teacher?.id ?? null,
+          };
+          return { ...studentToRow(student), archived_at: rowArchivedAt };
+        })
+        .filter(Boolean);
+
+      const savedStudentsResult = studentsToImport.length
+        ? await supabase.from("students").insert(studentsToImport).select("*")
+        : { data: [], error: null };
+      if (savedStudentsResult.error) throw savedStudentsResult.error;
+      const importedStudents = (savedStudentsResult.data || []).map(normalizeStudent);
+      const importedEnrollmentRows = importedStudents
+        .map((student) => enrollmentToRow(buildEnrollmentFromStudent(student, student.id)))
+        .filter((row) => row.course_name);
+      const savedEnrollmentsResult = importedEnrollmentRows.length
+        ? await supabase.from("enrollments").insert(importedEnrollmentRows).select("*")
+        : { data: [], error: null };
+      if (savedEnrollmentsResult.error) throw savedEnrollmentsResult.error;
+      const importedEnrollments = (savedEnrollmentsResult.data || []).map(normalizeEnrollment);
+      const enrollmentLookup = [...enrollments, ...importedEnrollments];
+      const enrollmentForImportedStudent = (student) =>
+        enrollmentLookup.find((enrollment) => sameId(enrollment.studentId, student?.id) && enrollment.status === "active") ||
+        enrollmentLookup.find((enrollment) => sameId(enrollment.studentId, student?.id));
+      const studentLookup = [...students, ...importedStudents];
+      const studentByName = (name) =>
+        studentLookup.find((student) => normalizeExcelKey(student.name) === normalizeExcelKey(name));
+
+      const paymentRows = [
+        ...getWorkbookRows(workbook, ["Pagesat"]).map((row) => ({ row, archivedAt: null })),
+        ...getWorkbookRows(workbook, ["Archive Pagesa"]).map((row) => ({ row, archivedAt })),
+      ];
+      const paymentsToImport = paymentRows
+        .map(({ row, archivedAt: rowArchivedAt }) => {
+          const studentName = getExcelValue(row, ["Nxenesi", "Nxënësi", "Student"]);
+          const teacherName = getExcelValue(row, ["Mesuesi", "Mësuesi", "Teacher"]);
+          const student = studentByName(studentName);
+          const teacher = teacherByName(teacherName);
+          const enrollment = enrollmentForImportedStudent(student);
+          const amount = parseMoney(getExcelValue(row, ["Shuma", "Pagesa", "Amount"]));
+          if (!amount && !studentName) return null;
+          const hours = getExcelValue(row, ["Oret", "Orët", "Hours"]);
+          const rate = getExcelValue(row, ["Cmimi/ore", "Çmimi/orë", "€/orë", "Rate"]);
+          const payment = {
+            studentId: student?.id ?? null,
+            studentName: student?.name || studentName || "Pa student",
+            enrollmentId: enrollment?.id || "",
+            courseId: enrollment?.courseId || "",
+            courseName: enrollment?.course || student?.course || "",
+            groupName: enrollment?.studentGroup || student?.studentGroup || "",
+            paymentMonth: monthFromDate(parseDateInput(getExcelValue(row, ["Data", "Date"]))),
+            teacherId: teacher?.id ?? enrollment?.teacherId ?? student?.teacherId ?? null,
+            teacherName: teacher?.name || enrollment?.teacherName || teacherName || "Pa mesues",
+            amount,
+            teacherPercent: parseMoney(getExcelValue(row, ["Mesuesi %", "Mësuesi %"])) || 80,
+            adminPercent: parseMoney(getExcelValue(row, ["Administrata %"])) || 15,
+            schoolPercent: parseMoney(getExcelValue(row, ["Shkolla %"])) || 5,
+            paymentType: hours ? "hourly" : "fixed",
+            hours,
+            rate: rate ? parseMoney(rate) : "",
+            note: getExcelValue(row, ["Shenime", "Shënime", "Note"]),
+            date: parseDateInput(getExcelValue(row, ["Data", "Date"])),
+          };
+          return { ...paymentToRow(payment), archived_at: rowArchivedAt };
+        })
+        .filter(Boolean);
+
+      const expenseRows = [
+        ...getWorkbookRows(workbook, ["Shpenzime"]).map((row) => ({ row, archivedAt: null })),
+        ...getWorkbookRows(workbook, ["Archive Shpenzime"]).map((row) => ({ row, archivedAt })),
+      ];
+      const expensesToImport = expenseRows
+        .map(({ row, archivedAt: rowArchivedAt }) => {
+          const name = getExcelValue(row, ["Produkti / Shpenzimi", "Produkti", "Shpenzimi"]);
+          const amount = parseMoney(getExcelValue(row, ["Cmimi", "Çmimi", "Amount"]));
+          if (!name) return null;
+          const expense = {
+            name,
+            date: parseDateInput(getExcelValue(row, ["Data", "Date"])),
+            amount,
+            note: getExcelValue(row, ["Shenime", "Shënime", "Note"]),
+          };
+          return { ...expenseToRow(expense), archived_at: rowArchivedAt };
+        })
+        .filter(Boolean);
+
+      const [savedPaymentsResult, savedExpensesResult] = await Promise.all([
+        paymentsToImport.length ? supabase.from("payments").insert(paymentsToImport).select("*") : { error: null },
+        expensesToImport.length ? supabase.from("expenses").insert(expensesToImport).select("*") : { error: null },
+      ]);
+      if (savedPaymentsResult.error) throw savedPaymentsResult.error;
+      if (savedExpensesResult.error) throw savedExpensesResult.error;
+
+      await loadSupabaseData({ showLoading: false });
+      window.alert("Importi i te gjitha te dhenave perfundoi.");
+    } catch (error) {
+      reportDataError(error);
+    } finally {
+      event.target.value = "";
+    }
+  };
+
+  const selectedEnrollmentStudent = studentsWithEnrollment.find((student) => sameId(student.id, enrollmentStudentId));
+  const selectedEnrollmentRows = enrollmentStudentId ? studentEnrollmentRows(enrollmentStudentId) : [];
+  const sortedSelectedEnrollmentRows = sortRows(selectedEnrollmentRows, "enrollments", {
+    course: (enrollment) => enrollment.course,
+    group: (enrollment) => enrollment.group,
+    studentGroup: (enrollment) => enrollment.studentGroup,
+    teacherName: (enrollment) =>
+      enrollment.teacherName || teachers.find((teacher) => sameId(teacher.id, enrollment.teacherId))?.name || "",
+    status: (enrollment) => enrollmentStatusLabel(enrollment.status),
+  });
+
+  const selectedPaymentStudentDetails = studentsWithEnrollment.find((student) => sameId(student.id, selectedStudent));
   const selectedPaymentCourseDetails = selectedPaymentStudentDetails ? getStudentCourse(selectedPaymentStudentDetails) : null;
   const isSelectedPaymentHourly = isHourlyCourse(selectedPaymentCourseDetails);
   const isEditingPaymentHourly = editingPaymentType === "hourly";
 
-  const navItems = [
+  const navItems = useMemo(() => [
     { key: "students", label: "Nxënësit" },
     { key: "teachers", label: "Mësuesit" },
     { key: "payments", label: "Pagesat" },
@@ -2479,7 +3369,16 @@ export default function App() {
     { key: "finance", label: "Financa" },
     { key: "courses", label: "Kurset" },
     { key: "archive", label: "Arkiva" },
-  ];
+  ], []);
+  const visibleNavItems = useMemo(
+    () => (isTeacherUser ? navItems.filter((item) => !["finance", "archive"].includes(item.key)) : navItems),
+    [isTeacherUser, navItems]
+  );
+
+  useEffect(() => {
+    if (visibleNavItems.some((item) => item.key === activeView)) return;
+    setActiveView("students");
+  }, [activeView, visibleNavItems]);
 
   if (isAuthLoading) {
     return (
@@ -2535,12 +3434,39 @@ export default function App() {
     );
   }
 
+  if (hasLoadedData && !hasAppAccess) {
+    return (
+      <div className={`${shell} flex min-h-screen items-center justify-center p-4`} style={{ background: HIGHLIGHT }}>
+        <div className="w-full max-w-md rounded-lg bg-white p-6 text-center shadow-xl">
+          <div className="mb-4 flex justify-center">
+            <BrandMark />
+          </div>
+          <h1 className="text-2xl font-bold" style={{ color: PRIMARY }}>Vatra e Diturisë</h1>
+          <p className="mt-3 text-gray-600">
+            Ky email nuk ka qasje në aplikacion. Shto emailin te tabela e mësuesve ose te VITE_ADMIN_EMAILS.
+          </p>
+          <button type="button" onClick={signOut} className={`${mainBtn} mt-5`} style={dangerBtnStyle}>
+            Sign out
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className={`${shell} h-dvh min-h-0 overflow-hidden flex flex-col lg:flex-row`} style={{ background: HIGHLIGHT }}>
+    <div
+      className={`${shell} h-dvh min-h-0 overflow-hidden flex flex-col lg:flex-row`}
+      style={{ background: HIGHLIGHT }}
+      onClick={clearRowSelections}
+    >
       <button
         type="button"
-        onClick={() => setIsMobileSidebarOpen(true)}
-        className="fixed left-3 top-3 z-50 flex h-12 w-12 items-center justify-center rounded-lg bg-white shadow-md lg:hidden"
+        onClick={() => setIsMobileSidebarOpen((prev) => !prev)}
+        className={`fixed top-3 z-[60] flex h-12 w-12 items-center justify-center rounded-lg bg-white shadow-md transition-all duration-200 lg:hidden ${
+          isMobileSidebarOpen
+            ? "pointer-events-none left-0 -translate-x-full opacity-0"
+            : "left-0 -translate-x-1/2 opacity-100"
+        }`}
         aria-label="Hap sidebar"
         title="Hap sidebar"
       >
@@ -2571,7 +3497,7 @@ export default function App() {
             />
           </button>
           <div className="sidebar-nav space-y-2 lg:space-y-1.5">
-            {navItems.map((item) => (
+            {visibleNavItems.map((item) => (
               <button
                 key={item.key}
                 onClick={() => {
@@ -2588,6 +3514,21 @@ export default function App() {
             ))}
           </div>
         </div>
+        {isTeacherUser && (
+          <div
+            className={`mt-2 rounded-lg bg-white/10 px-3 py-2 text-sm font-medium text-white ${
+              isSidebarCollapsed ? "lg:text-center" : ""
+            }`}
+            title={currentTeacherAccount?.name || currentUser?.email}
+          >
+            <span className={isSidebarCollapsed ? "lg:hidden" : ""}>
+              {currentTeacherAccount?.name || currentUser?.email}
+            </span>
+            <span className={`hidden ${isSidebarCollapsed ? "lg:inline" : ""}`}>
+              {(currentTeacherAccount?.name || currentUser?.email || "M").slice(0, 1)}
+            </span>
+          </div>
+        )}
         <button
           type="button"
           onClick={() => setIsSettingsModalOpen(true)}
@@ -2599,7 +3540,7 @@ export default function App() {
         </button>
       </aside>
 
-      <main className="flex-1 min-h-0 p-3 pt-16 sm:p-4 sm:pt-16 lg:p-6 lg:pt-6 space-y-4 lg:space-y-6 overflow-auto">
+      <main className="flex-1 min-h-0 p-3 sm:p-4 lg:p-6 space-y-4 lg:space-y-6 overflow-auto">
         {isDataLoading && (
           <div className="fixed right-4 top-4 z-50 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-500 shadow-sm">
             Loading Supabase data...
@@ -2630,6 +3571,7 @@ export default function App() {
               </div>
             </div>
 
+            {canManageData && (
             <div className="flex flex-col sm:flex-row justify-end gap-2 mb-6">
               <input
                 ref={studentImportRef}
@@ -2639,11 +3581,12 @@ export default function App() {
                 onChange={importStudentsFromExcel}
               />
               <button onClick={() => studentImportRef.current?.click()} className={mainBtn} style={secondaryBtnStyle}>{actionLabel("import", "Importo nxënës")}</button>
-              <button onClick={() => setIsStudentModalOpen(true)} className={mainBtn} style={primaryBtnStyle}>{actionLabel("add", "Shto nxënës")}</button>
+              <button onClick={() => { setStudentForm({ ...emptyStudentForm, group: currentMonthInput() }); setIsStudentModalOpen(true); }} className={mainBtn} style={primaryBtnStyle}>{actionLabel("add", "Shto nxënës")}</button>
             </div>
+            )}
 
             <div className={tableWrap}>
-              <table className="min-w-[82rem] w-full text-sm">
+              <table className="min-w-[90rem] w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-200">
                     <th className={thClass}>Nr</th>
@@ -2656,6 +3599,7 @@ export default function App() {
                     <th className={thClass}>{sortButton("students", "course", "Kursi")}</th>
                     <th className={thClass}>{sortButton("students", "group", "Muaji")}</th>
                     <th className={thClass}>{sortButton("students", "studentGroup", "Grupi")}</th>
+                    <th className={thClass}>{sortButton("students", "status", "Statusi")}</th>
                     <th className={thClass}>{sortButton("students", "payment", "Pagesa")}</th>
                     <th className={thClass}>{sortButton("students", "teacherName", "Mësuesi")}</th>
                     <th className={thClass}>Veprime</th>
@@ -2668,7 +3612,14 @@ export default function App() {
                     const isEditing = editingStudentId === student.id;
                     const hasPayment = hasStudentCurrentPayment(student);
                     return (
-                      <tr key={student.id} onClick={() => setSelectedStudentView((prev) => (prev === student.id ? null : student.id))} className={`${rowHover} cursor-pointer ${isSelected ? selectedRow : ""}`}>
+                      <tr
+                        key={student.id}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setSelectedStudentView((prev) => (prev === student.id ? null : student.id));
+                        }}
+                        className={`${rowHover} cursor-pointer ${isSelected ? selectedRow : ""}`}
+                      >
                         <td className={tdClass}>{index + 1}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingStudentFirstName} onChange={(e) => setEditingStudentFirstName(e.target.value)} /> : (student.firstName || student.name)}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingStudentLastName} onChange={(e) => setEditingStudentLastName(e.target.value)} /> : (student.lastName || "-")}</td>
@@ -2693,6 +3644,7 @@ export default function App() {
                         ) : (student.course || "-")}</td>
                         <td className={tdClass}>{isEditing ? <input className={dateInput} type="month" value={editingStudentGroup} onChange={(e) => setEditingStudentGroup(e.target.value)} /> : formatMonthYear(student.group)}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingStudentStudentGroup} onChange={(e) => setEditingStudentStudentGroup(e.target.value)} placeholder="gr1" /> : (student.studentGroup || "-")}</td>
+                        <td className={tdClass}>{enrollmentStatusLabel(student.enrollmentStatus)}</td>
                         <td className={tdClass}>
                           {hasPayment && !isEditing ? (
                             <img
@@ -2700,14 +3652,20 @@ export default function App() {
                               alt="E paguar"
                               className="h-5 w-5"
                             />
-                          ) : (
+                          ) : canManageData ? (
                             <input
                               type="checkbox"
-                              checked={hasPayment}
-                              onChange={() => toggleStudentPayment(student)}
-                              onClick={(e) => e.stopPropagation()}
+                              checked={false}
+                              readOnly
+                              onChange={() => {}}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openPaymentModalForStudent(student);
+                              }}
                               className={roundCheckbox}
                             />
+                          ) : (
+                            "-"
                           )}
                         </td>
                         <td className={tdClass}>
@@ -2734,11 +3692,14 @@ export default function App() {
                                 <button onClick={(e) => { e.stopPropagation(); saveEditStudent(); }} className={smallBtn} style={primaryBtnStyle}>Save</button>
                                 <button onClick={(e) => { e.stopPropagation(); cancelEditStudent(); }} className={smallBtn} style={secondaryBtnStyle}>Cancel</button>
                               </>
-                            ) : (
+                            ) : canManageData ? (
                               <>
                                 <button onClick={(e) => { e.stopPropagation(); startEditStudent(student); }} className={smallBtn} style={secondaryBtnStyle}>{actionLabel("edit", "Edit")}</button>
+                                <button onClick={(e) => { e.stopPropagation(); openEnrollmentModal(student); }} className={smallBtn} style={primaryBtnStyle}>Kurset</button>
                                 <button onClick={(e) => { e.stopPropagation(); archiveStudent(student); }} className={smallBtn} style={warningBtnStyle}>{actionLabel("archive", "Archive")}</button>
                               </>
+                            ) : (
+                              <span className="text-gray-500">Vetëm lexim</span>
                             )}
                           </div>
                         </td>
@@ -2771,6 +3732,7 @@ export default function App() {
               </div>
             </div>
 
+            {canManageData && (
             <div className="flex flex-col sm:flex-row justify-end gap-2 mb-6">
               <button
                 onClick={openAssignStudentsModal}
@@ -2782,14 +3744,16 @@ export default function App() {
               </button>
               <button onClick={() => setIsTeacherModalOpen(true)} className={mainBtn} style={secondaryBtnStyle}>{actionLabel("add", "Shto mësues")}</button>
             </div>
+            )}
 
             <div className={tableWrap}>
-              <table className="min-w-[50rem] w-full text-sm">
+              <table className="min-w-[62rem] w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-200">
                     <th className={thClass}>Nr</th>
                     <th className={thClass}>{sortButton("teachers", "name", "Emri")}</th>
                     <th className={thClass}>{sortButton("teachers", "lastName", "Mbiemri")}</th>
+                    <th className={thClass}>{sortButton("teachers", "email", "Email")}</th>
                     <th className={thClass}>Përqindja</th>
                     <th className={thClass}>{sortButton("teachers", "studentsCount", "Nxënës")}</th>
                     <th className={thClass}>Veprime</th>
@@ -2801,10 +3765,18 @@ export default function App() {
                     const isEditing = editingTeacherId === teacher.id;
                     const countStudents = teacherStudentsForMonth(teacher.id).length;
                     return (
-                      <tr key={teacher.id} onClick={() => setSelectedTeacherView((prev) => (prev === teacher.id ? null : teacher.id))} className={`${rowHover} cursor-pointer ${isSelected ? selectedRow : ""}`}>
+                      <tr
+                        key={teacher.id}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setSelectedTeacherView((prev) => (prev === teacher.id ? null : teacher.id));
+                        }}
+                        className={`${rowHover} cursor-pointer ${isSelected ? selectedRow : ""}`}
+                      >
                         <td className={tdClass}>{index + 1}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingTeacherFirstName} onChange={(e) => setEditingTeacherFirstName(e.target.value)} /> : (teacher.firstName || teacher.name)}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingTeacherLastName} onChange={(e) => setEditingTeacherLastName(e.target.value)} /> : (teacher.lastName || "-")}</td>
+                        <td className={tdClass}>{isEditing ? <input className={input} value={editingTeacherEmail} onChange={(e) => setEditingTeacherEmail(e.target.value)} type="email" /> : (teacher.email || "-")}</td>
                         <td className={tdClass}>{isEditing ? (
                           <SearchableSelect
                             className={input}
@@ -2820,13 +3792,15 @@ export default function App() {
                             {isEditing ? (
                               <>
                                 <button onClick={(e) => { e.stopPropagation(); saveEditTeacher(); }} className={smallBtn} style={primaryBtnStyle}>Save</button>
-                                <button onClick={(e) => { e.stopPropagation(); setEditingTeacherId(null); }} className={smallBtn} style={secondaryBtnStyle}>Cancel</button>
+                                <button onClick={(e) => { e.stopPropagation(); setEditingTeacherId(null); setEditingTeacherEmail(""); }} className={smallBtn} style={secondaryBtnStyle}>Cancel</button>
                               </>
-                            ) : (
+                            ) : canManageData ? (
                               <>
                                 <button onClick={(e) => { e.stopPropagation(); startEditTeacher(teacher); }} className={smallBtn} style={secondaryBtnStyle}>{actionLabel("edit", "Edit")}</button>
                                 <button onClick={(e) => { e.stopPropagation(); archiveTeacher(teacher); }} className={smallBtn} style={warningBtnStyle}>{actionLabel("archive", "Archive")}</button>
                               </>
+                            ) : (
+                              <span className="text-gray-500">Vetëm lexim</span>
                             )}
                           </div>
                         </td>
@@ -2886,7 +3860,7 @@ export default function App() {
                 <h2 className="text-2xl font-bold" style={{ color: PRIMARY }}>Pagesat</h2>
                 <p className="text-gray-500">Menaxho pagesat dhe filtro sipas studentit, mësuesit ose datës.</p>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 w-full lg:w-[34rem]">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 w-full xl:w-[56rem]">
                 {searchField({
                   value: paymentSearch,
                   onChange: (e) => setPaymentSearch(e.target.value),
@@ -2894,20 +3868,29 @@ export default function App() {
                 })}
                 <SearchableSelect
                   className={input}
-                  value={activePaymentTeacherFilter}
-                  onChange={setPaymentTeacherFilter}
+                  value={isTeacherUser ? currentTeacherAccount?.name || "" : activePaymentTeacherFilter}
+                  onChange={isTeacherUser ? () => {} : setPaymentTeacherFilter}
                   placeholder="Të gjithë mësuesit"
-                  options={[
-                    { value: "", label: "Të gjithë mësuesit" },
-                    ...sortedTeachersAlpha.map((teacher) => ({ value: teacher.name, label: teacher.name })),
-                  ]}
+                  disabled={isTeacherUser}
+                  options={isTeacherUser
+                    ? [{ value: currentTeacherAccount?.name || "", label: currentTeacherAccount?.name || "Mësuesi" }]
+                    : [
+                        { value: "", label: "Të gjithë mësuesit" },
+                        ...sortedTeachersAlpha.map((teacher) => ({ value: teacher.name, label: teacher.name })),
+                      ]}
                 />
+                <input className={dateInput} type="month" value={paymentMonthFilter} onChange={(e) => setPaymentMonthFilter(e.target.value)} />
+                <button onClick={() => setPaymentMonthFilter("")} className={mainBtn} style={secondaryBtnStyle}>
+                  {actionLabel("clear", "Pastro filtrin")}
+                </button>
               </div>
             </div>
 
+            {canManageData && (
             <div className="flex justify-end mb-6">
               <button onClick={openPaymentModal} className={mainBtn} style={secondaryBtnStyle}>{actionLabel("add", "Shto pagesë")}</button>
             </div>
+            )}
 
             <div className={tableWrap}>
               <table className="min-w-[64rem] w-full text-sm">
@@ -2956,7 +3939,7 @@ export default function App() {
                           <input className={input} value={editingPaymentRate} onChange={(e) => changeEditingPaymentRate(e.target.value)} type="number" min="0" step="0.01" />
                         ) : (payment.paymentType === "hourly" ? formatCurrency(payment.rate) : "-")}</td>
                         <td className={tdClass}>{isEditing ? (
-                          <input className={dateInput} value={editingPaymentDate} onChange={(e) => setEditingPaymentDate(e.target.value)} type="date" />
+                          <DateTextInput className={dateInput} value={editingPaymentDate} onChange={setEditingPaymentDate} />
                         ) : formatDateDisplay(payment.date)}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingPaymentNote} onChange={(e) => setEditingPaymentNote(e.target.value)} /> : (payment.note || "-")}</td>
                         <td className={tdClass}>
@@ -2966,11 +3949,13 @@ export default function App() {
                                 <button onClick={saveEditPayment} className={smallBtn} style={primaryBtnStyle}>Save</button>
                                 <button onClick={() => { setEditingPaymentId(null); setEditingPaymentDate(""); setEditingPaymentNote(""); setEditingPaymentHours(""); setEditingPaymentRate(""); setEditingPaymentType("fixed"); }} className={smallBtn} style={secondaryBtnStyle}>Cancel</button>
                               </>
-                            ) : (
+                            ) : canManageData ? (
                               <>
                                 <button onClick={() => startEditPayment(payment)} className={smallBtn} style={secondaryBtnStyle}>{actionLabel("edit", "Edit")}</button>
                                 <button onClick={() => archivePayment(payment)} className={smallBtn} style={warningBtnStyle}>{actionLabel("archive", "Archive")}</button>
                               </>
+                            ) : (
+                              <span className="text-gray-500">Vetëm lexim</span>
                             )}
                           </div>
                         </td>
@@ -2994,13 +3979,24 @@ export default function App() {
                 <input className={dateInput} type="month" value={financeMonth} onChange={(e) => setFinanceMonth(e.target.value)} />
                 <SearchableSelect
                   className={input}
-                  value={activeFinanceTeacherFilter}
-                  onChange={setFinanceTeacherFilter}
+                  value={isTeacherUser ? currentTeacherAccount?.name || "" : activeFinanceTeacherFilter}
+                  onOpen={() => setSelectedPagaTeacherView(null)}
+                  onChange={
+                    isTeacherUser
+                      ? () => {}
+                      : (nextTeacher) => {
+                          setSelectedPagaTeacherView(null);
+                          setFinanceTeacherFilter(nextTeacher);
+                        }
+                  }
                   placeholder="Të gjithë mësuesit"
-                  options={[
-                    { value: "", label: "Të gjithë mësuesit" },
-                    ...sortedTeachersAlpha.map((teacher) => ({ value: teacher.name, label: teacher.name })),
-                  ]}
+                  disabled={isTeacherUser}
+                  options={isTeacherUser
+                    ? [{ value: currentTeacherAccount?.name || "", label: currentTeacherAccount?.name || "Mësuesi" }]
+                    : [
+                        { value: "", label: "Të gjithë mësuesit" },
+                        ...sortedTeachersAlpha.map((teacher) => ({ value: teacher.name, label: teacher.name })),
+                      ]}
                 />
                 <button onClick={() => openFinanceExportNoteModal("excel")} className={mainBtn} style={secondaryBtnStyle}>{actionLabel("export", "Excel")}</button>
                 <button onClick={() => openFinanceExportNoteModal("pdf")} className={mainBtn} style={primaryBtnStyle}>{actionLabel("export", "PDF")}</button>
@@ -3028,7 +4024,10 @@ export default function App() {
                     return (
                       <tr
                         key={teacher.id}
-                        onClick={() => setSelectedPagaTeacherView((prev) => (sameId(prev, teacher.id) ? null : teacher.id))}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setSelectedPagaTeacherView((prev) => (sameId(prev, teacher.id) ? null : teacher.id));
+                        }}
                         className={`${rowHover} cursor-pointer ${isSelected ? selectedRow : ""}`}
                       >
                         <td className={tdClass}>{index + 1}</td>
@@ -3107,31 +4106,42 @@ export default function App() {
                 <h2 className="text-2xl font-bold" style={{ color: PRIMARY }}>Financa</h2>
                 <p className="text-gray-500">Overview + shpenzimet e shkollës.</p>
               </div>
-              <div className="w-full lg:w-60">
+              <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-2 lg:w-[24rem]">
                 <input className={dateInput} type="month" value={financeOverviewMonth} onChange={(e) => setFinanceOverviewMonth(e.target.value)} />
+                <button onClick={() => setFinanceOverviewMonth("")} className={mainBtn} style={secondaryBtnStyle}>
+                  {actionLabel("clear", "Pastro filtrin")}
+                </button>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-4">
               <div className="p-4 rounded-xl border">
-                <div className="text-gray-500 text-sm">Të hyrat</div>
+                <div className="text-gray-500 text-sm">Të hyrat totale</div>
                 <div className="text-xl font-bold">{formatCurrency(overviewIncome)}</div>
               </div>
               <div className="p-4 rounded-xl border">
-                <div className="text-gray-500 text-sm">Paga mësuesve</div>
+                <div className="text-gray-500 text-sm">Pagat e mësuesve</div>
                 <div className="text-xl font-bold">{formatCurrency(overviewTeacherPay)}</div>
               </div>
               <div className="p-4 rounded-xl border">
-                <div className="text-gray-500 text-sm">Shpenzime</div>
-                <div className="text-xl font-bold">{formatCurrency(overviewExpenses)}</div>
+                <div className="text-gray-500 text-sm">Administrata</div>
+                <div className="text-xl font-bold">{formatCurrency(overviewAdminShare)}</div>
               </div>
               <div className="p-4 rounded-xl border">
-                <div className="text-gray-500 text-sm">Te mbetura</div>
+                <div className="text-gray-500 text-sm">Shkolla</div>
                 <div className="text-xl font-bold">
                   {formatCurrency(
-                    overviewProfit
+                    overviewSchoolShare
                   )}
                 </div>
+              </div>
+              <div className="p-4 rounded-xl border">
+                <div className="text-gray-500 text-sm">Buxheti i shkollës</div>
+                <div className="text-xl font-bold">{formatCurrency(overviewProfit)}</div>
+              </div>
+              <div className="p-4 rounded-xl border">
+                <div className="text-gray-500 text-sm">Shpenzimet</div>
+                <div className="text-xl font-bold">{formatCurrency(overviewExpenses)}</div>
               </div>
             </div>
 
@@ -3166,7 +4176,7 @@ export default function App() {
                       <tr key={expense.id} className={rowHover}>
                         <td className={tdClass}>{index + 1}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingExpenseName} onChange={(e) => setEditingExpenseName(e.target.value)} /> : expense.name}</td>
-                        <td className={tdClass}>{isEditing ? <input className={dateInput} type="date" value={editingExpenseDate} onChange={(e) => setEditingExpenseDate(e.target.value)} /> : formatDateDisplay(expense.date)}</td>
+                        <td className={tdClass}>{isEditing ? <DateTextInput className={dateInput} value={editingExpenseDate} onChange={setEditingExpenseDate} /> : formatDateDisplay(expense.date)}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} type="number" value={editingExpenseAmount} onChange={(e) => setEditingExpenseAmount(e.target.value)} /> : formatCurrency(expense.amount)}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={expenseNote} onChange={(e) => setExpenseNote(e.target.value)} /> : (expense.note || "-")}</td>
                         <td className={tdClass}>
@@ -3209,9 +4219,11 @@ export default function App() {
               </div>
             </div>
 
+            {canManageData && (
             <div className="flex justify-end mb-6">
               <button onClick={() => setIsCourseModalOpen(true)} className={mainBtn} style={primaryBtnStyle}>{actionLabel("add", "Shto kurs")}</button>
             </div>
+            )}
 
             <div className={tableWrap}>
               <table className="min-w-[44rem] w-full text-sm">
@@ -3248,11 +4260,13 @@ export default function App() {
                                 <button onClick={saveEditCourse} className={smallBtn} style={primaryBtnStyle}>Save</button>
                                 <button onClick={() => setEditingCourseId(null)} className={smallBtn} style={secondaryBtnStyle}>Cancel</button>
                               </>
-                            ) : (
+                            ) : canManageData ? (
                               <>
                                 <button onClick={() => startEditCourse(course)} className={smallBtn} style={secondaryBtnStyle}>{actionLabel("edit", "Edit")}</button>
                                 <button onClick={() => archiveCourse(course)} className={smallBtn} style={warningBtnStyle}>{actionLabel("archive", "Archive")}</button>
                               </>
+                            ) : (
+                              <span className="text-gray-500">Vetëm lexim</span>
                             )}
                           </div>
                         </td>
@@ -3332,12 +4346,13 @@ export default function App() {
                 </div>
               </div>
               <div className={tableWrap}>
-                <table className="min-w-[34rem] w-full text-sm">
+                <table className="min-w-[42rem] w-full text-sm">
                   <thead>
                     <tr className="border-b border-gray-200">
                       <th className={thClass}>Nr</th>
                       <th className={thClass}>#</th>
                       <th className={thClass}>Emri</th>
+                      <th className={thClass}>Email</th>
                       <th className={thClass}>%</th>
                       <th className={thClass}>Veprimi</th>
                     </tr>
@@ -3348,6 +4363,7 @@ export default function App() {
                         <td className={tdClass}>{index + 1}</td>
                         <td className={tdClass}><input type="checkbox" className={roundCheckbox} checked={archiveSelection.teachers.includes(teacher.id)} onChange={() => toggleArchiveSelection("teachers", teacher.id)} /></td>
                         <td className={tdClass}>{teacher.name}</td>
+                        <td className={tdClass}>{teacher.email || "-"}</td>
                         <td className={tdClass}>{teacher.percent}%</td>
                         <td className={tdClass}>
                           <div className="flex gap-2">
@@ -3491,6 +4507,133 @@ export default function App() {
           </div>
         )}
 
+        {isEnrollmentModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center overflow-y-auto bg-black/40 p-3 sm:p-4" onClick={() => setIsEnrollmentModalOpen(false)}>
+            <div className="my-4 w-full max-w-5xl rounded-lg bg-white p-4 sm:p-6 shadow-xl space-y-5" onClick={(e) => e.stopPropagation()}>
+              <div className="flex flex-col gap-1">
+                <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>
+                  Kurset e nxënësit {selectedEnrollmentStudent ? `- ${selectedEnrollmentStudent.name}` : ""}
+                </h3>
+                <p className="text-sm text-gray-500">
+                  Mbaje historikun e kurseve pa e humbur pagesën e vjetër.
+                </p>
+              </div>
+
+              <div className={tableWrap}>
+                <table className="min-w-[60rem] w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-200">
+                      <th className={thClass}>{sortButton("enrollments", "group", "Muaji")}</th>
+                      <th className={thClass}>{sortButton("enrollments", "course", "Kursi")}</th>
+                      <th className={thClass}>{sortButton("enrollments", "studentGroup", "Grupi")}</th>
+                      <th className={thClass}>{sortButton("enrollments", "teacherName", "Mësuesi")}</th>
+                      <th className={thClass}>{sortButton("enrollments", "status", "Statusi")}</th>
+                      <th className={thClass}>Deri</th>
+                      <th className={thClass}>Shënime</th>
+                      <th className={thClass}>Veprime</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sortedSelectedEnrollmentRows.length > 0 ? (
+                      sortedSelectedEnrollmentRows.map((enrollment) => {
+                        const teacher = teachers.find((item) => sameId(item.id, enrollment.teacherId));
+                        return (
+                          <tr key={enrollment.id} className={rowHover}>
+                            <td className={tdClass}>{formatMonthYear(enrollment.group)}</td>
+                            <td className={tdClass}>{enrollment.course || "-"}</td>
+                            <td className={tdClass}>{enrollment.studentGroup || "-"}</td>
+                            <td className={tdClass}>{teacher?.name || enrollment.teacherName || "Pa mësues"}</td>
+                            <td className={tdClass}>{enrollmentStatusLabel(enrollment.status)}</td>
+                            <td className={tdClass}>{formatMonthYear(enrollment.endMonth)}</td>
+                            <td className={tdClass}>{enrollment.note || "-"}</td>
+                            <td className={tdClass}>
+                              <div className="flex flex-wrap gap-2">
+                                <button type="button" onClick={() => startEditEnrollment(enrollment)} className={smallBtn} style={secondaryBtnStyle}>
+                                  {actionLabel("edit", "Edit")}
+                                </button>
+                                {enrollment.status !== "active" && (
+                                  <button type="button" onClick={() => updateEnrollmentStatus(enrollment, "active")} className={smallBtn} style={primaryBtnStyle}>
+                                    Aktiv
+                                  </button>
+                                )}
+                                {enrollment.status === "active" && (
+                                  <button type="button" onClick={() => updateEnrollmentStatus(enrollment, "completed")} className={smallBtn} style={warningBtnStyle}>
+                                    Përfundo
+                                  </button>
+                                )}
+                                {enrollment.status !== "inactive" && (
+                                  <button type="button" onClick={() => updateEnrollmentStatus(enrollment, "inactive")} className={smallBtn} style={secondaryBtnStyle}>
+                                    Joaktiv
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    ) : (
+                      <tr><td className={tdClass} colSpan={8}>Ky nxënës ende nuk ka historik kursi.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 sm:p-4">
+                <h4 className="mb-3 font-bold" style={{ color: PRIMARY }}>
+                  {editingEnrollmentId ? "Ndrysho regjistrimin" : "Shto regjistrim të ri"}
+                </h4>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <SearchableSelect
+                    className={input}
+                    value={enrollmentForm.course}
+                    onChange={(nextValue) => setEnrollmentForm((prev) => ({ ...prev, course: nextValue }))}
+                    placeholder="Zgjedh kursin"
+                    options={[
+                      { value: "", label: "Zgjedh kursin" },
+                      ...sortedCoursesAlpha.map((course) => ({ value: course.name, label: course.name })),
+                    ]}
+                  />
+                  <SearchableSelect
+                    className={input}
+                    value={enrollmentForm.teacherId}
+                    onChange={(nextValue) => setEnrollmentForm((prev) => ({ ...prev, teacherId: nextValue }))}
+                    placeholder="Pa mësues"
+                    options={[
+                      { value: "", label: "Pa mësues" },
+                      ...sortedTeachersAlpha.map((teacher) => ({ value: teacher.id, label: teacher.name })),
+                    ]}
+                  />
+                  <input className={dateInput} type="month" value={enrollmentForm.group} onChange={(e) => setEnrollmentForm((prev) => ({ ...prev, group: e.target.value }))} aria-label="Muaji" title="Muaji" />
+                  <input className={input} value={enrollmentForm.studentGroup} onChange={(e) => setEnrollmentForm((prev) => ({ ...prev, studentGroup: e.target.value }))} placeholder="Grupi (p.sh. gr1)" />
+                  <SearchableSelect
+                    className={input}
+                    value={enrollmentForm.status}
+                    onChange={(nextValue) => setEnrollmentForm((prev) => ({ ...prev, status: nextValue }))}
+                    placeholder="Statusi"
+                    options={enrollmentStatusOptions}
+                  />
+                  <input className={dateInput} type="month" value={enrollmentForm.endMonth} onChange={(e) => setEnrollmentForm((prev) => ({ ...prev, endMonth: e.target.value }))} aria-label="Deri" title="Deri" disabled={enrollmentForm.status === "active"} />
+                  <input className={`${input} md:col-span-2`} value={enrollmentForm.note} onChange={(e) => setEnrollmentForm((prev) => ({ ...prev, note: e.target.value }))} placeholder="Shënime" />
+                </div>
+                <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:justify-end">
+                  {editingEnrollmentId && (
+                    <button type="button" onClick={() => resetEnrollmentForm(selectedEnrollmentStudent)} className={smallBtn} style={secondaryBtnStyle}>
+                      Cancel
+                    </button>
+                  )}
+                  <button type="button" onClick={saveEnrollmentForm} className={smallBtn} style={primaryBtnStyle}>
+                    {editingEnrollmentId ? "Save" : "Shto regjistrim"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+                <button type="button" onClick={() => setIsEnrollmentModalOpen(false)} className={smallBtn} style={secondaryBtnStyle}>Close</button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {isPaymentModalOpen && (
           <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center overflow-y-auto bg-black/40 p-3 sm:p-4" onClick={() => setIsPaymentModalOpen(false)}>
             <form
@@ -3502,7 +4645,7 @@ export default function App() {
               }}
             >
               <div>
-                <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>Shto pagesë</h3>
+                <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>{paymentModalTitle}</h3>
                 <p className="text-sm text-gray-500">Zgjedh nxënësin dhe përcakto ndarjen e pagesës.</p>
               </div>
 
@@ -3527,7 +4670,7 @@ export default function App() {
                   </>
                 )}
                 <input className={input} value={paymentAmount} onChange={(e) => setPaymentAmount(e.target.value)} placeholder="Shuma" />
-                <input className={dateInput} type="date" value={paymentDate} onChange={(e) => setPaymentDate(e.target.value)} />
+                <DateTextInput className={dateInput} value={paymentDate} onChange={setPaymentDate} required />
                 <div className="relative min-w-0">
                   <input className={`${input} pr-9`} type="number" min="0" max="100" step="0.01" value={paymentTeacherPercent} onChange={(e) => setPaymentTeacherPercent(e.target.value)} placeholder="Paga e mësuesit" />
                   <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-500">%</span>
@@ -3568,7 +4711,7 @@ export default function App() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <input className={input} value={expenseName} onChange={(e) => setExpenseName(e.target.value)} placeholder="Produkti / Shpenzimi" required />
-                <input className={dateInput} type="date" value={expenseDate} onChange={(e) => setExpenseDate(e.target.value)} required />
+                <DateTextInput className={dateInput} value={expenseDate} onChange={setExpenseDate} required />
                 <input className={`${input} md:col-span-2`} type="number" value={expenseAmount} onChange={(e) => setExpenseAmount(e.target.value)} placeholder="Çmimi" min="0" step="0.01" required />
                 <input className={`${input} md:col-span-2`} value={expenseNote} onChange={(e) => setExpenseNote(e.target.value)} placeholder="Shenime" />
               </div>
@@ -3739,6 +4882,7 @@ export default function App() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <input className={input} value={teacherForm.firstName} onChange={(e) => setTeacherForm((prev) => ({ ...prev, firstName: e.target.value }))} placeholder="Emri" required />
                 <input className={input} value={teacherForm.lastName} onChange={(e) => setTeacherForm((prev) => ({ ...prev, lastName: e.target.value }))} placeholder="Mbiemri" required />
+                <input className={`${input} md:col-span-2`} value={teacherForm.email} onChange={(e) => setTeacherForm((prev) => ({ ...prev, email: e.target.value }))} placeholder="Emaili i mësuesit" type="email" />
                 <div className="md:col-span-2">
                   <SearchableSelect
                     className={input}
@@ -3813,7 +4957,7 @@ export default function App() {
               />
 
               <div className="max-h-[50vh] overflow-y-auto rounded-lg border border-gray-200">
-                {students.some((student) => !student.teacherId || sameId(student.teacherId, assignTeacherId)) ? (
+                {studentsWithEnrollment.some((student) => !student.teacherId || sameId(student.teacherId, assignTeacherId)) ? (
                   sortedStudentsAlpha
                     .filter((student) => !student.teacherId || sameId(student.teacherId, assignTeacherId))
                     .map((student) => {
@@ -3877,9 +5021,23 @@ export default function App() {
                     Sign in with Google
                   </button>
                 )}
-                <button type="button" onClick={exportAllData} className={`${mainBtn} mt-4`} style={secondaryBtnStyle}>
-                  {actionLabel("export", "Eksporto te gjitha")}
-                </button>
+                {canManageData && (
+                  <>
+                    <input
+                      ref={allDataImportRef}
+                      type="file"
+                      accept=".xlsx,.xls"
+                      className="hidden"
+                      onChange={importAllData}
+                    />
+                    <button type="button" onClick={exportAllData} className={`${mainBtn} mt-4`} style={secondaryBtnStyle}>
+                      {actionLabel("export", "Eksporto te gjitha")}
+                    </button>
+                    <button type="button" onClick={() => allDataImportRef.current?.click()} className={mainBtn} style={secondaryBtnStyle}>
+                      {actionLabel("import", "Importo te gjitha")}
+                    </button>
+                  </>
+                )}
                 <button type="button" onClick={signOut} className={mainBtn} style={dangerBtnStyle}>
                   Sign out
                 </button>
