@@ -6,6 +6,7 @@ import addIcon from "./assets/add.png";
 import archiveIcon from "./assets/archive.png";
 import assignIcon from "./assets/assign.png";
 import clearIcon from "./assets/clear.png";
+import coursesIcon from "./assets/courses.png";
 import deleteIcon from "./assets/delete.png";
 import doneIcon from "./assets/done.png";
 import editIcon from "./assets/edit.png";
@@ -20,7 +21,7 @@ import sidebarIcon from "./assets/sidebar.png";
 import { isSupabaseConfigured, supabase } from "./supabase";
 
 function formatCurrency(value) {
-  return `€${Number(value || 0).toFixed(2)}`;
+  return `â‚¬${Number(value || 0).toFixed(2)}`;
 }
 
 function formatExportCurrency(value) {
@@ -234,16 +235,19 @@ const emptyCourseForm = {
 };
 
 const pricingTypeOptions = [
-  { value: "hourly", label: "Me orë" },
+  { value: "hourly", label: "Me orÃ«" },
   { value: "fixed", label: "Mujore" },
 ];
 
 const enrollmentStatusOptions = [
   { value: "active", label: "Aktiv" },
   { value: "inactive", label: "Joaktiv" },
-  { value: "paused", label: "Pauzë" },
-  { value: "completed", label: "Përfunduar" },
+  { value: "paused", label: "PauzÃ«" },
+  { value: "completed", label: "PÃ«rfunduar" },
 ];
+
+const SCHOOL_SHARE_CAP_START_MONTH = "2026-04";
+const SCHOOL_SHARE_CAP_AMOUNT = 30;
 
 function enrollmentStatusLabel(status) {
   return enrollmentStatusOptions.find((option) => option.value === status)?.label || "Aktiv";
@@ -309,7 +313,7 @@ function SearchableSelect({
   onChange,
   options,
   placeholder = "Zgjedh",
-  searchPlaceholder = "Kërko...",
+  searchPlaceholder = "KÃ«rko...",
   className = "",
   disabled = false,
   onOpen,
@@ -366,7 +370,7 @@ function SearchableSelect({
         <span className={`truncate ${selectedOption ? "" : "text-gray-500"}`}>
           {selectedOption?.label || placeholder}
         </span>
-        <span className="shrink-0 text-xs text-gray-500">▼</span>
+        <span className="shrink-0 text-xs text-gray-500">â–¼</span>
       </button>
 
       {isOpen && (
@@ -491,8 +495,11 @@ export default function App() {
   const [selectedTeacherView, setSelectedTeacherView] = useState(null);
   const [selectedPagaTeacherView, setSelectedPagaTeacherView] = useState(null);
   const [selectedStudentView, setSelectedStudentView] = useState(null);
+  const [detailsStudentId, setDetailsStudentId] = useState(null);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [isDuplicateMergeModalOpen, setIsDuplicateMergeModalOpen] = useState(false);
   const [isAllIncomeModalOpen, setIsAllIncomeModalOpen] = useState(false);
+  const [isMonthEndReminderDismissed, setIsMonthEndReminderDismissed] = useState(false);
   const [session, setSession] = useState(null);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [authError, setAuthError] = useState("");
@@ -514,8 +521,9 @@ export default function App() {
   const [editingCoursePrice, setEditingCoursePrice] = useState("");
   const [editingCoursePricingType, setEditingCoursePricingType] = useState("fixed");
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
-  const [paymentModalTitle, setPaymentModalTitle] = useState("Shto pagesë");
+  const [paymentModalTitle, setPaymentModalTitle] = useState("Shto pagesÃ«");
   const [selectedStudent, setSelectedStudent] = useState("");
+  const [selectedPaymentEnrollmentId, setSelectedPaymentEnrollmentId] = useState("");
   const [paymentAmount, setPaymentAmount] = useState("");
   const [paymentHours, setPaymentHours] = useState("");
   const [paymentRate, setPaymentRate] = useState("");
@@ -572,6 +580,7 @@ export default function App() {
   const [editingPaymentId, setEditingPaymentId] = useState(null);
   const [editingPaymentAmount, setEditingPaymentAmount] = useState("");
   const [editingPaymentStudentId, setEditingPaymentStudentId] = useState("");
+  const [editingPaymentEnrollmentId, setEditingPaymentEnrollmentId] = useState("");
   const [editingPaymentDate, setEditingPaymentDate] = useState("");
   const [editingPaymentNote, setEditingPaymentNote] = useState("");
   const [editingPaymentHours, setEditingPaymentHours] = useState("");
@@ -645,9 +654,12 @@ export default function App() {
   const isTeacherUser = Boolean(currentTeacherAccount && !isAdminUser);
   const hasAppAccess = isAdminUser || Boolean(currentTeacherAccount);
   const canManageData = isAdminUser;
+  const today = new Date();
+  const isLastDayOfMonth = today.getDate() === new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
   const icons = {
     search: searchIcon,
     clear: clearIcon,
+    courses: coursesIcon,
     restore: restoreIcon,
     delete: deleteIcon,
     export: exportIcon,
@@ -712,6 +724,14 @@ export default function App() {
       });
 
   const activeEnrollmentForStudent = (student) => studentEnrollmentRows(student.id)[0] || null;
+  const paymentEnrollmentOptionsForStudent = (studentId) => {
+    const rows = studentEnrollmentRows(studentId).filter((enrollment) => !enrollment.archivedAt);
+    return rows.length ? rows : [];
+  };
+  const paymentEnrollmentLabel = (enrollment) =>
+    [enrollment.course || "Pa kurs", formatMonthYear(enrollment.group), enrollment.studentGroup || ""]
+      .filter(Boolean)
+      .join(" - ");
 
   const enrichStudentWithEnrollment = (student) => {
     const enrollment = activeEnrollmentForStudent(student);
@@ -737,6 +757,63 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [students, enrollments, courses, teachers]
   );
+  const duplicateStudentGroups = useMemo(() => {
+    const groups = students.reduce((result, student) => {
+      const firstName = normalizeExcelKey(student.firstName || student.name?.split(" ")?.[0] || "");
+      const lastName = normalizeExcelKey(student.lastName || student.name?.split(" ").slice(1).join(" ") || "");
+      if (!firstName || !lastName) return result;
+      const key = `${firstName}::${lastName}`;
+      if (!result[key]) result[key] = [];
+      result[key].push(student);
+      return result;
+    }, {});
+
+    return Object.values(groups)
+      .filter((group) => group.length > 1)
+      .sort((first, second) => compareText(first[0]?.name, second[0]?.name));
+  }, [students]);
+  const duplicateStudentFieldScore = (student) =>
+    [student.age, student.city, student.phone, student.email].filter(Boolean).length;
+  const duplicateStudentMonthValue = (student) => activeEnrollmentForStudent(student)?.group || student.group || "";
+  const rankDuplicateStudents = (group) =>
+    [...group].sort((first, second) => {
+      const fieldDiff = duplicateStudentFieldScore(second) - duplicateStudentFieldScore(first);
+      if (fieldDiff) return fieldDiff;
+      const monthSort = compareText(duplicateStudentMonthValue(second), duplicateStudentMonthValue(first));
+      if (monthSort) return monthSort;
+      return compareText(String(second.id), String(first.id));
+    });
+  const duplicateStudentMeta = (student) => {
+    const latestEnrollment = studentEnrollmentRows(student.id)[0] || null;
+    const teacher = teachers.find((item) => sameId(item.id, latestEnrollment?.teacherId ?? student.teacherId));
+    return {
+      course: latestEnrollment?.course || student.course || "Pa kurs",
+      month: formatMonthYear(latestEnrollment?.group || student.group || ""),
+      group: latestEnrollment?.studentGroup || student.studentGroup || "-",
+      teacherName: teacher?.name || "Pa mesues",
+      paymentsCount: payments.filter((payment) => sameId(payment.studentId, student.id)).length,
+      enrollmentsCount: studentEnrollmentRows(student.id).length,
+    };
+  };
+  const duplicateMergePreviewGroups = duplicateStudentGroups.map((group) => {
+    const rankedStudents = rankDuplicateStudents(group);
+    const primaryStudent = rankedStudents[0];
+    const duplicateStudents = rankedStudents.slice(1);
+    const groupStudentIds = rankedStudents.map((student) => student.id);
+    const groupEnrollments = enrollments
+      .filter((enrollment) => groupStudentIds.some((id) => sameId(id, enrollment.studentId)))
+      .sort((first, second) => compareText(second.group || "", first.group || ""));
+
+    return {
+      primaryStudent,
+      duplicateStudents,
+      latestEnrollment: groupEnrollments[0] || null,
+      totalEnrollments: groupEnrollments.length,
+      movedPayments: payments.filter((payment) =>
+        duplicateStudents.some((student) => sameId(student.id, payment.studentId))
+      ).length,
+    };
+  });
 
   const sortedCoursesAlpha = useMemo(
     () => [...courses].sort((first, second) => compareText(first.name, second.name)),
@@ -1023,6 +1100,129 @@ export default function App() {
     window.alert(message);
   };
 
+  const mergeDuplicateStudents = () => {
+    if (!duplicateStudentGroups.length) {
+      window.alert("Nuk u gjet asnje duplikat me emer dhe mbiemer identik.");
+      return;
+    }
+
+    setIsDuplicateMergeModalOpen(true);
+  };
+
+  const applyDuplicateStudentMerge = async () => {
+    if (!duplicateStudentGroups.length) {
+      window.alert("Nuk u gjet asnje duplikat me emer dhe mbiemer identik.");
+      return;
+    }
+
+    setIsDuplicateMergeModalOpen(false);
+
+    try {
+      for (const group of duplicateStudentGroups) {
+        const rankedStudents = rankDuplicateStudents(group);
+        const primaryStudent = rankedStudents[0];
+        const duplicateStudents = rankedStudents.slice(1);
+        if (!duplicateStudents.length) continue;
+
+        const mergedStudent = duplicateStudents.reduce(
+          (student, duplicate) => ({
+            ...student,
+            age: student.age || duplicate.age || "",
+            city: student.city || duplicate.city || "",
+            phone: student.phone || duplicate.phone || "",
+            email: student.email || duplicate.email || "",
+          }),
+          primaryStudent
+        );
+        const combinedEnrollments = enrollments
+          .filter((enrollment) =>
+            [primaryStudent.id, ...duplicateStudents.map((student) => student.id)].some((id) => sameId(id, enrollment.studentId))
+          )
+          .sort((first, second) => compareText(second.group || "", first.group || ""));
+        const latestEnrollmentId = combinedEnrollments[0]?.id || null;
+
+        const updatedPrimary = await updateRow("students", primaryStudent.id, studentToRow(mergedStudent), normalizeStudent);
+        setStudents((prev) => prev.map((student) => (sameId(student.id, primaryStudent.id) ? updatedPrimary || mergedStudent : student)));
+
+        const latestEnrollment = combinedEnrollments.find((enrollment) => sameId(enrollment.id, latestEnrollmentId)) || null;
+        const historicalEnrollments = combinedEnrollments.filter((enrollment) => !sameId(enrollment.id, latestEnrollmentId));
+
+        for (const enrollment of historicalEnrollments) {
+          if (enrollment.status !== "active") continue;
+          const closedEnrollment = {
+            ...enrollment,
+            status: "completed",
+            endMonth: enrollment.endMonth || enrollment.group || currentMonthInput(),
+          };
+          const closeResult = await supabase
+            .from("enrollments")
+            .update(enrollmentToRow(closedEnrollment))
+            .eq("id", enrollment.id);
+          if (closeResult.error) throw closeResult.error;
+        }
+
+        for (const enrollment of historicalEnrollments) {
+          const nextEnrollment = {
+            ...enrollment,
+            studentId: primaryStudent.id,
+            status: enrollment.status === "active" ? "completed" : enrollment.status,
+            endMonth: enrollment.endMonth || enrollment.group || currentMonthInput(),
+          };
+          const moveResult = await supabase
+            .from("enrollments")
+            .update(enrollmentToRow(nextEnrollment))
+            .eq("id", enrollment.id);
+          if (moveResult.error) throw moveResult.error;
+        }
+
+        if (latestEnrollment) {
+          const nextLatestEnrollment = {
+            ...latestEnrollment,
+            studentId: primaryStudent.id,
+            status: "active",
+            endMonth: "",
+          };
+          const latestResult = await supabase
+            .from("enrollments")
+            .update(enrollmentToRow(nextLatestEnrollment))
+            .eq("id", latestEnrollment.id);
+          if (latestResult.error) throw latestResult.error;
+
+          const syncedPrimaryStudent = {
+            ...mergedStudent,
+            course: nextLatestEnrollment.course || mergedStudent.course || "",
+            group: nextLatestEnrollment.group || mergedStudent.group || "",
+            studentGroup: nextLatestEnrollment.studentGroup || mergedStudent.studentGroup || "",
+            teacherId: nextLatestEnrollment.teacherId || mergedStudent.teacherId || null,
+          };
+          const syncedPrimaryResult = await updateRow("students", primaryStudent.id, studentToRow(syncedPrimaryStudent), normalizeStudent);
+          setStudents((prev) =>
+            prev.map((student) => (sameId(student.id, primaryStudent.id) ? syncedPrimaryResult || syncedPrimaryStudent : student))
+          );
+        }
+
+        for (const duplicate of duplicateStudents) {
+          const paymentsResult = await supabase
+            .from("payments")
+            .update({ student_id: primaryStudent.id, student_name: mergedStudent.name })
+            .eq("student_id", duplicate.id);
+          if (paymentsResult.error) throw paymentsResult.error;
+
+          const archiveDuplicate = await supabase
+            .from("students")
+            .update({ archived_at: new Date().toISOString() })
+            .eq("id", duplicate.id);
+          if (archiveDuplicate.error) throw archiveDuplicate.error;
+        }
+      }
+
+      await loadSupabaseData({ showLoading: false });
+      window.alert("Duplikatet u bashkuan. Kontrolloji edhe njehere regjistrimet te Kurset.");
+    } catch (error) {
+      reportDataError(error);
+    }
+  };
+
   const buildEnrollmentFromStudent = (student, studentId, overrides = {}) => {
     const course = courses.find((item) => item.name === student.course || sameId(item.id, student.courseId));
     const teacher = teachers.find((item) => sameId(item.id, student.teacherId));
@@ -1302,13 +1502,13 @@ export default function App() {
   const sortButton = (table, key, label) => (
     <button type="button" className={sortBtnClass} onClick={() => changeSort(table, key)}>
       <span>{label}</span>
-      <span>{sortConfig[table]?.key === key ? (sortConfig[table].direction === "asc" ? "▲" : "▼") : ""}</span>
+      <span>{sortConfig[table]?.key === key ? (sortConfig[table].direction === "asc" ? "â–²" : "â–¼") : ""}</span>
     </button>
   );
 
   const isHourlyCourse = (course) => (course?.pricingType || "fixed") === "hourly";
   const hourlyPaymentAmount = (hours, rate) => Number(hours || 0) * parseMoney(rate);
-  const pricingTypeLabel = (type) => ((type || "fixed") === "hourly" ? "Me orë" : "Mujore");
+  const pricingTypeLabel = (type) => ((type || "fixed") === "hourly" ? "Me orÃ«" : "Mujore");
 
   useEffect(() => {
     setPayments((prev) => {
@@ -1323,7 +1523,7 @@ export default function App() {
           ...payment,
           studentName: payment.studentName || student?.name || "Pa student",
           teacherId: payment.teacherId != null ? payment.teacherId : enrollment?.teacherId != null ? enrollment.teacherId : student?.teacherId ?? null,
-          teacherName: payment.teacherName || teacher?.name || "Pa mësues",
+          teacherName: payment.teacherName || teacher?.name || "Pa mÃ«sues",
         };
         if (
           patched.studentName !== payment.studentName ||
@@ -1349,7 +1549,7 @@ export default function App() {
           ...payment,
           studentName: payment.studentName || student?.name || "Pa student",
           teacherId: payment.teacherId != null ? payment.teacherId : enrollment?.teacherId != null ? enrollment.teacherId : student?.teacherId ?? null,
-          teacherName: payment.teacherName || teacher?.name || "Pa mësues",
+          teacherName: payment.teacherName || teacher?.name || "Pa mÃ«sues",
         };
         if (
           patched.studentName !== payment.studentName ||
@@ -1412,7 +1612,7 @@ export default function App() {
           const finalFirstName = firstName || fallbackParts[0] || "";
           const finalLastName = lastName || fallbackParts.slice(1).join(" ");
           const name = [finalFirstName, finalLastName].filter(Boolean).join(" ");
-          const teacherName = getExcelValue(row, ["Mesuesi", "Mësuesi", "Teacher"]);
+          const teacherName = getExcelValue(row, ["Mesuesi", "MÃ«suesi", "Teacher"]);
           const teacher = teachers.find((item) => item.name.toLowerCase() === teacherName.toLowerCase());
 
           if (!name) return null;
@@ -1531,8 +1731,9 @@ export default function App() {
   };
 
   const openPaymentModal = () => {
-    setPaymentModalTitle("Shto pagesë");
+    setPaymentModalTitle("Shto pagesÃ«");
     setSelectedStudent("");
+    setSelectedPaymentEnrollmentId("");
     setPaymentAmount("");
     setPaymentHours("");
     setPaymentRate("");
@@ -1544,11 +1745,22 @@ export default function App() {
     setIsPaymentModalOpen(true);
   };
 
-  const setPaymentDefaultsForStudent = (studentId) => {
+  const setPaymentDefaultsForStudent = (studentId, enrollmentId = "") => {
     setSelectedStudent(studentId);
     const student = studentsWithEnrollment.find((s) => sameId(s.id, studentId));
-    const course = student ? getStudentCourse(student) : null;
-    const price = student ? getStudentCoursePrice(student) : 0;
+    const enrollmentOptions = paymentEnrollmentOptionsForStudent(studentId);
+    const selectedEnrollment =
+      enrollmentOptions.find((enrollment) => sameId(enrollment.id, enrollmentId)) ||
+      enrollmentOptions.find((enrollment) => enrollment.status === "active") ||
+      enrollmentOptions[0] ||
+      null;
+    setSelectedPaymentEnrollmentId(selectedEnrollment?.id || "");
+    const course = selectedEnrollment
+      ? getStudentCourse({ course: selectedEnrollment.course, courseId: selectedEnrollment.courseId })
+      : student
+        ? getStudentCourse(student)
+        : null;
+    const price = Number(course?.price || 0);
     if (isHourlyCourse(course)) {
       setPaymentHours("");
       setPaymentRate(price ? String(price) : "10");
@@ -1562,12 +1774,16 @@ export default function App() {
 
   const openPaymentModalForStudent = (student) => {
     openPaymentModal();
-    setPaymentModalTitle(`Pagesa - ${student.name || "Nxënësi"}`);
+    setPaymentModalTitle(`Pagesa - ${student.name || "NxÃ«nÃ«si"}`);
     setPaymentDefaultsForStudent(student.id);
   };
 
   const changePaymentStudent = (studentId) => {
     setPaymentDefaultsForStudent(studentId);
+  };
+
+  const changePaymentEnrollment = (enrollmentId) => {
+    setPaymentDefaultsForStudent(selectedStudent, enrollmentId);
   };
 
   const changePaymentHours = (hours) => {
@@ -1585,20 +1801,27 @@ export default function App() {
   const addPayment = async () => {
     if (!paymentAmount || !selectedStudent) return;
     const student = studentsWithEnrollment.find((s) => sameId(s.id, selectedStudent));
-    const teacher = teachers.find((t) => sameId(t.id, student?.teacherId));
-    const course = student ? getStudentCourse(student) : null;
+    const enrollment =
+      paymentEnrollmentOptionsForStudent(selectedStudent).find((item) => sameId(item.id, selectedPaymentEnrollmentId)) ||
+      activeEnrollmentForStudent(student || { id: selectedStudent });
+    const teacher = teachers.find((t) => sameId(t.id, enrollment?.teacherId ?? student?.teacherId));
+    const course = enrollment
+      ? getStudentCourse({ course: enrollment.course, courseId: enrollment.courseId })
+      : student
+        ? getStudentCourse(student)
+        : null;
     const isHourly = isHourlyCourse(course);
     const nextPayment = 
       {
         studentId: selectedStudent,
         studentName: student?.name || "Pa student",
-        enrollmentId: student?.enrollmentId || "",
-        courseId: student?.courseId || "",
-        courseName: student?.course || "",
-        groupName: student?.studentGroup || "",
+        enrollmentId: enrollment?.id || student?.enrollmentId || "",
+        courseId: enrollment?.courseId || student?.courseId || "",
+        courseName: enrollment?.course || student?.course || "",
+        groupName: enrollment?.studentGroup || student?.studentGroup || "",
         paymentMonth: paymentDate ? monthFromDate(paymentDate) : currentPaymentMonth,
-        teacherId: student?.teacherId ?? null,
-        teacherName: teacher?.name || "Pa mësues",
+        teacherId: enrollment?.teacherId ?? student?.teacherId ?? null,
+        teacherName: teacher?.name || "Pa mÃ«sues",
         amount: parseMoney(paymentAmount),
         teacherPercent: Number(paymentTeacherPercent),
         adminPercent: Number(paymentAdminPercent),
@@ -1617,6 +1840,7 @@ export default function App() {
       setPaymentRate("");
       setPaymentNote("");
       setSelectedStudent("");
+      setSelectedPaymentEnrollmentId("");
       setPaymentDate(currentDateInput());
       setPaymentTeacherPercent(80);
       setPaymentAdminPercent(15);
@@ -2071,6 +2295,7 @@ export default function App() {
     setEditingPaymentId(payment.id);
     setEditingPaymentAmount(String(payment.amount));
     setEditingPaymentStudentId(String(payment.studentId));
+    setEditingPaymentEnrollmentId(String(payment.enrollmentId || ""));
     setEditingPaymentDate(payment.date ? String(payment.date).slice(0, 10) : "");
     setEditingPaymentNote(payment.note || "");
     setEditingPaymentHours(payment.hours == null ? "" : String(payment.hours));
@@ -2081,21 +2306,29 @@ export default function App() {
   const saveEditPayment = async () => {
     if (!editingPaymentAmount || !editingPaymentStudentId || !editingPaymentDate) return;
     const student = studentsWithEnrollment.find((s) => sameId(s.id, editingPaymentStudentId));
-    const teacher = teachers.find((t) => sameId(t.id, student?.teacherId));
+    const enrollment =
+      paymentEnrollmentOptionsForStudent(editingPaymentStudentId).find((item) => sameId(item.id, editingPaymentEnrollmentId)) ||
+      activeEnrollmentForStudent(student || { id: editingPaymentStudentId });
+    const teacher = teachers.find((t) => sameId(t.id, enrollment?.teacherId ?? student?.teacherId));
     const existingPayment = payments.find((payment) => payment.id === editingPaymentId);
-    const isHourly = editingPaymentType === "hourly";
+    const course = enrollment
+      ? getStudentCourse({ course: enrollment.course, courseId: enrollment.courseId })
+      : student
+        ? getStudentCourse(student)
+        : null;
+    const isHourly = editingPaymentType === "hourly" || isHourlyCourse(course);
     const nextPayment = 
       {
         amount: parseMoney(editingPaymentAmount),
         studentId: editingPaymentStudentId,
         studentName: student?.name || existingPayment?.studentName || "Pa student",
-        enrollmentId: student?.enrollmentId || existingPayment?.enrollmentId || "",
-        courseId: student?.courseId || existingPayment?.courseId || "",
-        courseName: student?.course || existingPayment?.courseName || "",
-        groupName: student?.studentGroup || existingPayment?.groupName || "",
+        enrollmentId: enrollment?.id || existingPayment?.enrollmentId || "",
+        courseId: enrollment?.courseId || existingPayment?.courseId || "",
+        courseName: enrollment?.course || existingPayment?.courseName || "",
+        groupName: enrollment?.studentGroup || existingPayment?.groupName || "",
         paymentMonth: monthFromDate(editingPaymentDate),
-        teacherId: student?.teacherId ?? null,
-        teacherName: teacher?.name || existingPayment?.teacherName || "Pa mësues",
+        teacherId: enrollment?.teacherId ?? student?.teacherId ?? null,
+        teacherName: teacher?.name || existingPayment?.teacherName || "Pa mÃ«sues",
         teacherPercent: existingPayment?.teacherPercent ?? 80,
         adminPercent: existingPayment?.adminPercent ?? 15,
         schoolPercent: existingPayment?.schoolPercent ?? 5,
@@ -2111,6 +2344,7 @@ export default function App() {
       setEditingPaymentId(null);
       setEditingPaymentAmount("");
       setEditingPaymentStudentId("");
+      setEditingPaymentEnrollmentId("");
       setEditingPaymentDate("");
       setEditingPaymentNote("");
       setEditingPaymentHours("");
@@ -2136,8 +2370,36 @@ export default function App() {
   const changeEditingPaymentStudent = (studentId) => {
     setEditingPaymentStudentId(studentId);
     const student = studentsWithEnrollment.find((s) => sameId(s.id, studentId));
-    const course = student ? getStudentCourse(student) : null;
-    const price = student ? getStudentCoursePrice(student) : 0;
+    const enrollmentOptions = paymentEnrollmentOptionsForStudent(studentId);
+    const selectedEnrollment = enrollmentOptions.find((enrollment) => enrollment.status === "active") || enrollmentOptions[0] || null;
+    setEditingPaymentEnrollmentId(selectedEnrollment?.id || "");
+    const course = selectedEnrollment
+      ? getStudentCourse({ course: selectedEnrollment.course, courseId: selectedEnrollment.courseId })
+      : student
+        ? getStudentCourse(student)
+        : null;
+    const price = Number(course?.price || 0);
+    if (isHourlyCourse(course)) {
+      setEditingPaymentType("hourly");
+      setEditingPaymentHours("");
+      setEditingPaymentRate(price ? String(price) : "10");
+      setEditingPaymentAmount("");
+      return;
+    }
+    setEditingPaymentType("fixed");
+    setEditingPaymentHours("");
+    setEditingPaymentRate("");
+    setEditingPaymentAmount(price ? String(price) : "");
+  };
+
+  const changeEditingPaymentEnrollment = (enrollmentId) => {
+    setEditingPaymentEnrollmentId(enrollmentId);
+    const selectedEnrollment =
+      paymentEnrollmentOptionsForStudent(editingPaymentStudentId).find((enrollment) => sameId(enrollment.id, enrollmentId)) || null;
+    const course = selectedEnrollment
+      ? getStudentCourse({ course: selectedEnrollment.course, courseId: selectedEnrollment.courseId })
+      : null;
+    const price = Number(course?.price || 0);
     if (isHourlyCourse(course)) {
       setEditingPaymentType("hourly");
       setEditingPaymentHours("");
@@ -2154,7 +2416,6 @@ export default function App() {
   const currentPaymentMonth = monthFromDate(new Date().toISOString());
 
   const getStudentCourse = (student) => courses.find((course) => sameId(course.id, student.courseId) || course.name === student.course);
-  const getStudentCoursePrice = (student) => Number(getStudentCourse(student)?.price || 0);
   const getStudentCurrentPayments = (student) =>
     payments.filter(
       (payment) =>
@@ -2180,6 +2441,65 @@ export default function App() {
   const paymentTeacher = useCallback(
     (payment) => teachers.find((teacher) => sameId(teacher.id, paymentTeacherId(payment))),
     [paymentTeacherId, teachers]
+  );
+  const adjustedTeacherPaymentRows = useCallback(
+    (teacher, teacherPayments) => {
+      const paymentsByMonth = teacherPayments.reduce((groups, payment) => {
+        const monthKey = monthFromDate(payment.date) || "";
+        if (!groups[monthKey]) groups[monthKey] = [];
+        groups[monthKey].push(payment);
+        return groups;
+      }, {});
+
+      return Object.entries(paymentsByMonth).flatMap(([monthKey, monthPayments]) => {
+        const baseRows = monthPayments.map((payment) => {
+          const total = Number(payment.amount || 0);
+          const teacherBaseShare = total * (paymentTeacherPercentValue(payment, teacher) / 100);
+          const adminShare = total * (paymentAdminPercentValue(payment) / 100);
+          const rawSchoolShare = total * (paymentSchoolPercentValue(payment) / 100);
+          return {
+            payment,
+            monthKey,
+            total,
+            teacherBaseShare,
+            adminShare,
+            rawSchoolShare,
+          };
+        });
+        const rawSchoolTotal = baseRows.reduce((sum, row) => sum + row.rawSchoolShare, 0);
+        const capApplies = monthKey >= SCHOOL_SHARE_CAP_START_MONTH;
+        const schoolMultiplier =
+          capApplies && rawSchoolTotal > SCHOOL_SHARE_CAP_AMOUNT
+            ? SCHOOL_SHARE_CAP_AMOUNT / rawSchoolTotal
+            : 1;
+
+        return baseRows.map((row) => {
+          const schoolShare = row.rawSchoolShare * schoolMultiplier;
+          const teacherShare = row.teacherBaseShare + (row.rawSchoolShare - schoolShare);
+          return {
+            ...row,
+            teacherShare,
+            schoolShare,
+          };
+        });
+      });
+    },
+    []
+  );
+  const summarizeTeacherPayments = useCallback(
+    (teacher, teacherPayments) => {
+      const rows = adjustedTeacherPaymentRows(teacher, teacherPayments);
+      return rows.reduce(
+        (summary, row) => ({
+          total: summary.total + row.total,
+          teacherShare: summary.teacherShare + row.teacherShare,
+          adminShare: summary.adminShare + row.adminShare,
+          schoolShare: summary.schoolShare + row.schoolShare,
+        }),
+        { total: 0, teacherShare: 0, adminShare: 0, schoolShare: 0 }
+      );
+    },
+    [adjustedTeacherPaymentRows]
   );
 
   const filteredStudents = studentsWithEnrollment.filter((student) => {
@@ -2233,7 +2553,7 @@ export default function App() {
     return {
       ...payment,
       studentName: payment.studentName || student?.name || "Pa student",
-      teacherName: payment.teacherName || teacher?.name || "Pa mësues",
+      teacherName: payment.teacherName || teacher?.name || "Pa mÃ«sues",
       courseName: payment.courseName || enrollment?.course || student?.course || "",
       groupName: payment.groupName || enrollment?.studentGroup || student?.studentGroup || "",
       month: monthFromDate(payment.date),
@@ -2279,20 +2599,8 @@ export default function App() {
           return sameTeacher && sameMonth;
         });
         const notes = [...new Set(relevantPayments.map((payment) => payment.note).filter(Boolean))].join("; ");
-
-        const total = relevantPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
-        const teacherShare = relevantPayments.reduce(
-          (sum, payment) => sum + Number(payment.amount || 0) * (paymentTeacherPercentValue(payment, teacher) / 100),
-          0
-        );
-        const adminShare = relevantPayments.reduce(
-          (sum, payment) => sum + Number(payment.amount || 0) * (paymentAdminPercentValue(payment) / 100),
-          0
-        );
-        const schoolShare = relevantPayments.reduce(
-          (sum, payment) => sum + Number(payment.amount || 0) * (paymentSchoolPercentValue(payment) / 100),
-          0
-        );
+        const summary = summarizeTeacherPayments(teacher, relevantPayments);
+        const { total, teacherShare, adminShare, schoolShare } = summary;
         const remainingShare = total - teacherShare - adminShare - schoolShare;
 
         return {
@@ -2306,7 +2614,7 @@ export default function App() {
           notes,
         };
       });
-  }, [teachers, studentsWithEnrollment, paymentsForCurrentUser, financeMonth, activeFinanceTeacherFilter, isTeacherUser, currentTeacherId, paymentTeacherId]);
+  }, [teachers, studentsWithEnrollment, paymentsForCurrentUser, financeMonth, activeFinanceTeacherFilter, isTeacherUser, currentTeacherId, paymentTeacherId, summarizeTeacherPayments]);
 
   const allTimeIncomeOverview = useMemo(() => {
     const totalIncome = payments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
@@ -2314,23 +2622,19 @@ export default function App() {
       (sum, payment) => sum + Number(payment.amount || 0) * (paymentAdminPercentValue(payment) / 100),
       0
     );
-    const totalSchoolShare = payments.reduce(
-      (sum, payment) => sum + Number(payment.amount || 0) * (paymentSchoolPercentValue(payment) / 100),
-      0
-    );
     const teacherRows = teachers.map((teacher) => {
-      const total = payments
-        .filter((payment) => sameId(paymentTeacherId(payment), teacher.id))
-        .reduce(
-          (sum, payment) => sum + Number(payment.amount || 0) * (paymentTeacherPercentValue(payment, teacher) / 100),
-          0
-        );
+      const teacherPayments = payments.filter((payment) => sameId(paymentTeacherId(payment), teacher.id));
+      const total = summarizeTeacherPayments(teacher, teacherPayments).teacherShare;
       return {
         id: teacher.id,
         name: teacher.name,
         total,
       };
     });
+    const totalSchoolShare = teachers.reduce((sum, teacher) => {
+      const teacherPayments = payments.filter((payment) => sameId(paymentTeacherId(payment), teacher.id));
+      return sum + summarizeTeacherPayments(teacher, teacherPayments).schoolShare;
+    }, 0);
 
     return {
       totalIncome,
@@ -2338,7 +2642,7 @@ export default function App() {
       totalSchoolShare,
       teacherRows,
     };
-  }, [payments, teachers, paymentTeacherId]);
+  }, [payments, teachers, paymentTeacherId, summarizeTeacherPayments]);
 
   const filteredArchiveStudents = archive.students.filter((student) => {
     const q = archiveSearch.trim().toLowerCase();
@@ -2480,22 +2784,23 @@ export default function App() {
     });
   }, [financeMonth, payments, selectedPagaTeacherView, paymentStudent, paymentEnrollment, paymentTeacherId]);
 
-  const financePaymentRows = paymentsForCurrentUser
-    .map((payment) => {
-      const student = paymentStudent(payment);
-      const teacher = paymentTeacher(payment);
-      if (!teacher) return null;
-      if (isTeacherUser && !sameId(teacher.id, currentTeacherId)) return null;
-      if (financeMonth && monthFromDate(payment.date) !== financeMonth) return null;
-      if (activeFinanceTeacherFilter && teacher.name !== activeFinanceTeacherFilter) return null;
-
-      return {
-        teacherName: teacher.name,
-        studentName: payment.studentName || student?.name || "Pa student",
-        teacherPayment: Number(payment.amount || 0) * (paymentTeacherPercentValue(payment, teacher) / 100),
-      };
+  const financePaymentRows = teachers
+    .filter((teacher) => (isTeacherUser ? sameId(teacher.id, currentTeacherId) : !activeFinanceTeacherFilter || teacher.name === activeFinanceTeacherFilter))
+    .flatMap((teacher) => {
+      const teacherPayments = paymentsForCurrentUser.filter((payment) => {
+        const matchesTeacher = sameId(paymentTeacherId(payment), teacher.id);
+        const matchesMonth = financeMonth ? monthFromDate(payment.date) === financeMonth : true;
+        return matchesTeacher && matchesMonth;
+      });
+      return adjustedTeacherPaymentRows(teacher, teacherPayments).map((row) => {
+        const student = paymentStudent(row.payment);
+        return {
+          teacherName: teacher.name,
+          studentName: row.payment.studentName || student?.name || "Pa student",
+          teacherPayment: row.teacherShare,
+        };
+      });
     })
-    .filter(Boolean)
     .sort((a, b) => {
       const teacherSort = a.teacherName.localeCompare(b.teacherName, undefined, { sensitivity: "base" });
       return teacherSort || a.studentName.localeCompare(b.studentName, undefined, { sensitivity: "base" });
@@ -2505,24 +2810,26 @@ export default function App() {
   const financeExportTeacherName = isTeacherUser ? currentTeacherAccount?.name || "" : activeFinanceTeacherFilter;
   const overviewPayments = payments.filter((payment) => (financeOverviewMonth ? monthFromDate(payment.date) === financeOverviewMonth : true));
   const overviewIncome = overviewPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
-  const overviewTeacherPay = overviewPayments.reduce((sum, payment) => {
-    const teacher = paymentTeacher(payment);
-    return sum + Number(payment.amount || 0) * (paymentTeacherPercentValue(payment, teacher) / 100);
+  const overviewTeacherPay = teachers.reduce((sum, teacher) => {
+    const teacherPayments = overviewPayments.filter((payment) => sameId(paymentTeacherId(payment), teacher.id));
+    return sum + summarizeTeacherPayments(teacher, teacherPayments).teacherShare;
   }, 0);
   const overviewAdminShare = overviewPayments.reduce(
     (sum, payment) => sum + Number(payment.amount || 0) * (paymentAdminPercentValue(payment) / 100),
     0
   );
-  const overviewSchoolShare = overviewPayments.reduce(
-    (sum, payment) => sum + Number(payment.amount || 0) * (paymentSchoolPercentValue(payment) / 100),
-    0
-  );
+  const overviewSchoolShare = teachers.reduce((sum, teacher) => {
+    const teacherPayments = overviewPayments.filter((payment) => sameId(paymentTeacherId(payment), teacher.id));
+    return sum + summarizeTeacherPayments(teacher, teacherPayments).schoolShare;
+  }, 0);
   const overviewExpenses = expenses
     .filter((expense) => monthFromDate(expense.date) === financeOverviewMonth)
     .reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
-  const carriedSchoolShare = payments
-    .filter((payment) => monthIsOnOrBefore(payment.date, financeOverviewMonth))
-    .reduce((sum, payment) => sum + Number(payment.amount || 0) * (paymentSchoolPercentValue(payment) / 100), 0);
+  const carriedPayments = payments.filter((payment) => monthIsOnOrBefore(payment.date, financeOverviewMonth));
+  const carriedSchoolShare = teachers.reduce((sum, teacher) => {
+    const teacherPayments = carriedPayments.filter((payment) => sameId(paymentTeacherId(payment), teacher.id));
+    return sum + summarizeTeacherPayments(teacher, teacherPayments).schoolShare;
+  }, 0);
   const carriedExpenses = expenses
     .filter((expense) => monthIsOnOrBefore(expense.date, financeOverviewMonth))
     .reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
@@ -2669,12 +2976,12 @@ export default function App() {
     ...(financeExportTeacherName
       ? [
           [financeExportTeacherName, "", ""],
-          ["Nxënësi", "Pagesa", "Shenime"],
+          ["NxÃ«nÃ«si", "Pagesa", "Shenime"],
           ...financePaymentRows.map((row) => [row.studentName, formatExportCurrency(row.teacherPayment), note]),
           ["", formatExportCurrency(financeExportTotal), ""],
         ]
       : [
-          ["Mësuesi", "Nxënësi", "Pagesa", "Shenime"],
+          ["MÃ«suesi", "NxÃ«nÃ«si", "Pagesa", "Shenime"],
           ...financePaymentRows.map((row) => [row.teacherName, row.studentName, formatExportCurrency(row.teacherPayment), note]),
           ["", "", formatExportCurrency(financeExportTotal), ""],
         ]),
@@ -2731,7 +3038,7 @@ export default function App() {
         headStyles: { fontStyle: "bold" },
         head: [
           [{ content: financeExportTeacherName, colSpan: 3, styles: { fontStyle: "bold", halign: "center" } }],
-          ["Nxënësi", "Pagesa", "Shenime"],
+          ["NxÃ«nÃ«si", "Pagesa", "Shenime"],
         ],
         body: [
           ...financePaymentRows.map((row) => [row.studentName, formatExportCurrency(row.teacherPayment), note]),
@@ -2745,7 +3052,7 @@ export default function App() {
         tableWidth: "auto",
         styles: { lineColor: [0, 0, 0], lineWidth: 0.1 },
         headStyles: { fontStyle: "bold" },
-        head: [["Mësuesi", "Nxënësi", "Pagesa", "Shenime"]],
+        head: [["MÃ«suesi", "NxÃ«nÃ«si", "Pagesa", "Shenime"]],
         body: [
           ...financePaymentRows.map((row) => [row.teacherName, row.studentName, formatExportCurrency(row.teacherPayment), note]),
           ["", "", formatExportCurrency(financeExportTotal), ""],
@@ -2822,19 +3129,7 @@ export default function App() {
     const studentById = (id) => studentsWithEnrollment.find((student) => sameId(student.id, id));
     const allTimeTeacherRows = teachers.map((teacher, index) => {
       const teacherPayments = payments.filter((payment) => sameId(paymentTeacher(payment)?.id, teacher.id));
-      const total = teacherPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
-      const teacherShare = teacherPayments.reduce(
-        (sum, payment) => sum + Number(payment.amount || 0) * (paymentTeacherPercentValue(payment, teacher) / 100),
-        0
-      );
-      const adminShare = teacherPayments.reduce(
-        (sum, payment) => sum + Number(payment.amount || 0) * (paymentAdminPercentValue(payment) / 100),
-        0
-      );
-      const schoolShare = teacherPayments.reduce(
-        (sum, payment) => sum + Number(payment.amount || 0) * (paymentSchoolPercentValue(payment) / 100),
-        0
-      );
+      const { total, teacherShare, adminShare, schoolShare } = summarizeTeacherPayments(teacher, teacherPayments);
 
       return [
         index + 1,
@@ -2915,7 +3210,7 @@ export default function App() {
       {
         name: "Pagesat",
         rows: [
-          ["Nr", "Nxenesi", "Mesuesi", "Shuma", "Orët", "Çmimi/orë", "Data", "Mesuesi %", "Administrata %", "Shkolla %", "Shenime"],
+          ["Nr", "Nxenesi", "Mesuesi", "Shuma", "OrÃ«t", "Ã‡mimi/orÃ«", "Data", "Mesuesi %", "Administrata %", "Shkolla %", "Shenime"],
           ...payments.map((payment, index) => [
             index + 1,
             payment.studentName || studentById(payment.studentId)?.name || "Pa student",
@@ -3010,7 +3305,7 @@ export default function App() {
       {
         name: "Archive Pagesa",
         rows: [
-          ["Nr", "Nxenesi", "Mesuesi", "Shuma", "Orët", "Çmimi/orë", "Data", "Shenime"],
+          ["Nr", "Nxenesi", "Mesuesi", "Shuma", "OrÃ«t", "Ã‡mimi/orÃ«", "Data", "Shenime"],
           ...archive.payments.map((payment, index) => [
             index + 1,
             payment.studentName || "Pa student",
@@ -3055,19 +3350,7 @@ export default function App() {
       const monthExpenses = expenses.filter((expense) => monthFromDate(expense.date) === month);
       const monthTeacherRows = teachers.map((teacher, index) => {
         const teacherPayments = monthPayments.filter((payment) => sameId(paymentTeacher(payment)?.id, teacher.id));
-        const total = teacherPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
-        const teacherShare = teacherPayments.reduce(
-          (sum, payment) => sum + Number(payment.amount || 0) * (paymentTeacherPercentValue(payment, teacher) / 100),
-          0
-        );
-        const adminShare = teacherPayments.reduce(
-          (sum, payment) => sum + Number(payment.amount || 0) * (paymentAdminPercentValue(payment) / 100),
-          0
-        );
-        const schoolShare = teacherPayments.reduce(
-          (sum, payment) => sum + Number(payment.amount || 0) * (paymentSchoolPercentValue(payment) / 100),
-          0
-        );
+        const { total, teacherShare, adminShare, schoolShare } = summarizeTeacherPayments(teacher, teacherPayments);
         return [
           index + 1,
           teacher.firstName || teacher.name,
@@ -3088,10 +3371,10 @@ export default function App() {
         (sum, payment) => sum + Number(payment.amount || 0) * (paymentAdminPercentValue(payment) / 100),
         0
       );
-      const monthSchoolShare = monthPayments.reduce(
-        (sum, payment) => sum + Number(payment.amount || 0) * (paymentSchoolPercentValue(payment) / 100),
-        0
-      );
+      const monthSchoolShare = teachers.reduce((sum, teacher) => {
+        const teacherPayments = monthPayments.filter((payment) => sameId(paymentTeacher(payment)?.id, teacher.id));
+        return sum + summarizeTeacherPayments(teacher, teacherPayments).schoolShare;
+      }, 0);
       const monthExpenseTotal = monthExpenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
 
       return [
@@ -3164,8 +3447,8 @@ export default function App() {
       const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
       const archivedAt = new Date().toISOString();
       const teacherRows = [
-        ...getWorkbookRows(workbook, ["Mesuesit", "Mësuesit"]).map((row) => ({ row, archivedAt: null })),
-        ...getWorkbookRows(workbook, ["Archive Mesues", "Archive Mësues"]).map((row) => ({ row, archivedAt })),
+        ...getWorkbookRows(workbook, ["Mesuesit", "MÃ«suesit"]).map((row) => ({ row, archivedAt: null })),
+        ...getWorkbookRows(workbook, ["Archive Mesues", "Archive MÃ«sues"]).map((row) => ({ row, archivedAt })),
       ];
       const courseRows = [
         ...getWorkbookRows(workbook, ["Kurset"]).map((row) => ({ row, archivedAt: null })),
@@ -3176,13 +3459,13 @@ export default function App() {
         .map(({ row, archivedAt: rowArchivedAt }) => {
           const firstName = getExcelValue(row, ["Emri"]);
           const lastName = getExcelValue(row, ["Mbiemri"]);
-          const percent = parseMoney(getExcelValue(row, ["Perqindja", "Përqindja", "%"])) || 80;
+          const percent = parseMoney(getExcelValue(row, ["Perqindja", "PÃ«rqindja", "%"])) || 80;
           if (!firstName && !lastName) return null;
           const teacher = {
             name: [firstName, lastName].filter(Boolean).join(" "),
             firstName,
             lastName,
-            email: normalizeEmail(getExcelValue(row, ["Email", "Emaili", "Emaili i mesuesit", "Emaili i mësuesit"])),
+            email: normalizeEmail(getExcelValue(row, ["Email", "Emaili", "Emaili i mesuesit", "Emaili i mÃ«suesit"])),
             percent,
           };
           return { ...teacherToRow(teacher), archived_at: rowArchivedAt };
@@ -3193,7 +3476,7 @@ export default function App() {
         .map(({ row, archivedAt: rowArchivedAt }) => {
           const name = getExcelValue(row, ["Emri i kursit", "Kursi", "Emri"]);
           const typeLabel = normalizeExcelKey(getExcelValue(row, ["Lloji", "Tipi"]));
-          const price = parseMoney(getExcelValue(row, ["Cmimi", "Çmimi", "Price"]));
+          const price = parseMoney(getExcelValue(row, ["Cmimi", "Ã‡mimi", "Price"]));
           if (!name) return null;
           return {
             ...courseToRow({
@@ -3219,20 +3502,20 @@ export default function App() {
         teacherLookup.find((teacher) => normalizeExcelKey(teacher.name) === normalizeExcelKey(name));
 
       const studentRows = [
-        ...getWorkbookRows(workbook, ["Nxenesit", "Nxënësit"]).map((row) => ({ row, archivedAt: null })),
-        ...getWorkbookRows(workbook, ["Archive Nxenes", "Archive Nxënës"]).map((row) => ({ row, archivedAt })),
+        ...getWorkbookRows(workbook, ["Nxenesit", "NxÃ«nÃ«sit"]).map((row) => ({ row, archivedAt: null })),
+        ...getWorkbookRows(workbook, ["Archive Nxenes", "Archive NxÃ«nÃ«s"]).map((row) => ({ row, archivedAt })),
       ];
       const studentsToImport = studentRows
         .map(({ row, archivedAt: rowArchivedAt }) => {
           const firstName = getExcelValue(row, ["Emri"]);
           const lastName = getExcelValue(row, ["Mbiemri"]);
-          const fullName = getExcelValue(row, ["Nxenesi", "Nxënësi", "Emri Mbiemri"]);
+          const fullName = getExcelValue(row, ["Nxenesi", "NxÃ«nÃ«si", "Emri Mbiemri"]);
           const nameParts = fullName.split(" ").filter(Boolean);
           const finalFirstName = firstName || nameParts[0] || "";
           const finalLastName = lastName || nameParts.slice(1).join(" ");
           const name = [finalFirstName, finalLastName].filter(Boolean).join(" ");
           if (!name) return null;
-          const teacher = teacherByName(getExcelValue(row, ["Mesuesi", "Mësuesi", "Teacher"]));
+          const teacher = teacherByName(getExcelValue(row, ["Mesuesi", "MÃ«suesi", "Teacher"]));
           const student = {
             name,
             firstName: finalFirstName,
@@ -3277,15 +3560,15 @@ export default function App() {
       ];
       const paymentsToImport = paymentRows
         .map(({ row, archivedAt: rowArchivedAt }) => {
-          const studentName = getExcelValue(row, ["Nxenesi", "Nxënësi", "Student"]);
-          const teacherName = getExcelValue(row, ["Mesuesi", "Mësuesi", "Teacher"]);
+          const studentName = getExcelValue(row, ["Nxenesi", "NxÃ«nÃ«si", "Student"]);
+          const teacherName = getExcelValue(row, ["Mesuesi", "MÃ«suesi", "Teacher"]);
           const student = studentByName(studentName);
           const teacher = teacherByName(teacherName);
           const enrollment = enrollmentForImportedStudent(student);
           const amount = parseMoney(getExcelValue(row, ["Shuma", "Pagesa", "Amount"]));
           if (!amount && !studentName) return null;
-          const hours = getExcelValue(row, ["Oret", "Orët", "Hours"]);
-          const rate = getExcelValue(row, ["Cmimi/ore", "Çmimi/orë", "€/orë", "Rate"]);
+          const hours = getExcelValue(row, ["Oret", "OrÃ«t", "Hours"]);
+          const rate = getExcelValue(row, ["Cmimi/ore", "Ã‡mimi/orÃ«", "â‚¬/orÃ«", "Rate"]);
           const payment = {
             studentId: student?.id ?? null,
             studentName: student?.name || studentName || "Pa student",
@@ -3297,13 +3580,13 @@ export default function App() {
             teacherId: teacher?.id ?? enrollment?.teacherId ?? student?.teacherId ?? null,
             teacherName: teacher?.name || enrollment?.teacherName || teacherName || "Pa mesues",
             amount,
-            teacherPercent: parseMoney(getExcelValue(row, ["Mesuesi %", "Mësuesi %"])) || 80,
+            teacherPercent: parseMoney(getExcelValue(row, ["Mesuesi %", "MÃ«suesi %"])) || 80,
             adminPercent: parseMoney(getExcelValue(row, ["Administrata %"])) || 15,
             schoolPercent: parseMoney(getExcelValue(row, ["Shkolla %"])) || 5,
             paymentType: hours ? "hourly" : "fixed",
             hours,
             rate: rate ? parseMoney(rate) : "",
-            note: getExcelValue(row, ["Shenime", "Shënime", "Note"]),
+            note: getExcelValue(row, ["Shenime", "ShÃ«nime", "Note"]),
             date: parseDateInput(getExcelValue(row, ["Data", "Date"])),
           };
           return { ...paymentToRow(payment), archived_at: rowArchivedAt };
@@ -3317,13 +3600,13 @@ export default function App() {
       const expensesToImport = expenseRows
         .map(({ row, archivedAt: rowArchivedAt }) => {
           const name = getExcelValue(row, ["Produkti / Shpenzimi", "Produkti", "Shpenzimi"]);
-          const amount = parseMoney(getExcelValue(row, ["Cmimi", "Çmimi", "Amount"]));
+          const amount = parseMoney(getExcelValue(row, ["Cmimi", "Ã‡mimi", "Amount"]));
           if (!name) return null;
           const expense = {
             name,
             date: parseDateInput(getExcelValue(row, ["Data", "Date"])),
             amount,
-            note: getExcelValue(row, ["Shenime", "Shënime", "Note"]),
+            note: getExcelValue(row, ["Shenime", "ShÃ«nime", "Note"]),
           };
           return { ...expenseToRow(expense), archived_at: rowArchivedAt };
         })
@@ -3357,13 +3640,28 @@ export default function App() {
   });
 
   const selectedPaymentStudentDetails = studentsWithEnrollment.find((student) => sameId(student.id, selectedStudent));
-  const selectedPaymentCourseDetails = selectedPaymentStudentDetails ? getStudentCourse(selectedPaymentStudentDetails) : null;
+  const selectedDetailsStudent = studentsWithEnrollment.find((student) => sameId(student.id, detailsStudentId));
+  const selectedPaymentEnrollmentOptions = selectedStudent ? paymentEnrollmentOptionsForStudent(selectedStudent) : [];
+  const selectedPaymentEnrollmentDetails =
+    selectedPaymentEnrollmentOptions.find((enrollment) => sameId(enrollment.id, selectedPaymentEnrollmentId)) || null;
+  const selectedPaymentCourseDetails = selectedPaymentEnrollmentDetails
+    ? getStudentCourse({ course: selectedPaymentEnrollmentDetails.course, courseId: selectedPaymentEnrollmentDetails.courseId })
+    : selectedPaymentStudentDetails
+      ? getStudentCourse(selectedPaymentStudentDetails)
+      : null;
+  const editingPaymentEnrollmentOptions = editingPaymentStudentId ? paymentEnrollmentOptionsForStudent(editingPaymentStudentId) : [];
+  const editingPaymentEnrollmentDetails =
+    editingPaymentEnrollmentOptions.find((enrollment) => sameId(enrollment.id, editingPaymentEnrollmentId)) || null;
   const isSelectedPaymentHourly = isHourlyCourse(selectedPaymentCourseDetails);
-  const isEditingPaymentHourly = editingPaymentType === "hourly";
+  const isEditingPaymentHourly = editingPaymentType === "hourly" || isHourlyCourse(
+    editingPaymentEnrollmentDetails
+      ? getStudentCourse({ course: editingPaymentEnrollmentDetails.course, courseId: editingPaymentEnrollmentDetails.courseId })
+      : null
+  );
 
   const navItems = useMemo(() => [
-    { key: "students", label: "Nxënësit" },
-    { key: "teachers", label: "Mësuesit" },
+    { key: "students", label: "NxÃ«nÃ«sit" },
+    { key: "teachers", label: "MÃ«suesit" },
     { key: "payments", label: "Pagesat" },
     { key: "paga", label: "Paga" },
     { key: "finance", label: "Financa" },
@@ -3441,9 +3739,9 @@ export default function App() {
           <div className="mb-4 flex justify-center">
             <BrandMark />
           </div>
-          <h1 className="text-2xl font-bold" style={{ color: PRIMARY }}>Vatra e Diturisë</h1>
+          <h1 className="text-2xl font-bold" style={{ color: PRIMARY }}>Vatra e DiturisÃ«</h1>
           <p className="mt-3 text-gray-600">
-            Ky email nuk ka qasje në aplikacion. Shto emailin te tabela e mësuesve ose te VITE_ADMIN_EMAILS.
+            Ky email nuk ka qasje nÃ« aplikacion. Shto emailin te tabela e mÃ«suesve ose te VITE_ADMIN_EMAILS.
           </p>
           <button type="button" onClick={signOut} className={`${mainBtn} mt-5`} style={dangerBtnStyle}>
             Sign out
@@ -3551,18 +3849,28 @@ export default function App() {
             {dataError}
           </div>
         )}
+        {canManageData && isLastDayOfMonth && !isMonthEndReminderDismissed && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <span>Sot Ã«shtÃ« dita e fundit e muajit. Mos harro me i bo export nÃ« Excel tÃ« gjitha tÃ« dhÃ«nat.</span>
+              <button type="button" onClick={() => setIsMonthEndReminderDismissed(true)} className={smallBtn} style={secondaryBtnStyle}>
+                Mbylle
+              </button>
+            </div>
+          </div>
+        )}
         {activeView === "students" && (
           <div className={`border rounded-lg lg:rounded-2xl shadow-sm ${card} p-3 sm:p-4`}>
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
               <div>
-                <h2 className="text-2xl font-bold" style={{ color: PRIMARY }}>Nxënësit</h2>
-                <p className="text-gray-500">Menaxho nxënësit dhe mësuesin përkatës.</p>
+                <h2 className="text-2xl font-bold" style={{ color: PRIMARY }}>NxÃ«nÃ«sit</h2>
+                <p className="text-gray-500">Menaxho nxÃ«nÃ«sit dhe mÃ«suesin pÃ«rkatÃ«s.</p>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full lg:w-[44rem]">
                 {searchField({
                   value: studentSearch,
                   onChange: (e) => setStudentSearch(e.target.value),
-                  placeholder: "Kërko sipas emrit ose mësuesit",
+                  placeholder: "KÃ«rko sipas emrit ose mÃ«suesit",
                 })}
                 <input className={dateInput} type="month" value={studentGroupFilter} onChange={(e) => setStudentGroupFilter(e.target.value)} />
                 <button onClick={() => setStudentGroupFilter("")} className={mainBtn} style={secondaryBtnStyle}>
@@ -3580,28 +3888,24 @@ export default function App() {
                 className="hidden"
                 onChange={importStudentsFromExcel}
               />
-              <button onClick={() => studentImportRef.current?.click()} className={mainBtn} style={secondaryBtnStyle}>{actionLabel("import", "Importo nxënës")}</button>
-              <button onClick={() => { setStudentForm({ ...emptyStudentForm, group: currentMonthInput() }); setIsStudentModalOpen(true); }} className={mainBtn} style={primaryBtnStyle}>{actionLabel("add", "Shto nxënës")}</button>
+              <button onClick={() => studentImportRef.current?.click()} className={mainBtn} style={secondaryBtnStyle}>{actionLabel("import", "Importo nxÃ«nÃ«s")}</button>
+              <button onClick={() => { setStudentForm({ ...emptyStudentForm, group: currentMonthInput() }); setIsStudentModalOpen(true); }} className={mainBtn} style={primaryBtnStyle}>{actionLabel("add", "Shto nxÃ«nÃ«s")}</button>
             </div>
             )}
 
             <div className={tableWrap}>
-              <table className="min-w-[90rem] w-full text-sm">
+              <table className="min-w-[76rem] w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-200">
                     <th className={thClass}>Nr</th>
                     <th className={thClass}>{sortButton("students", "firstName", "Emri")}</th>
                     <th className={thClass}>{sortButton("students", "lastName", "Mbiemri")}</th>
-                    <th className={thClass}>{sortButton("students", "age", "Mosha")}</th>
-                    <th className={thClass}>{sortButton("students", "city", "Qyteti")}</th>
-                    <th className={thClass}>Telefoni</th>
-                    <th className={thClass}>Emaili</th>
                     <th className={thClass}>{sortButton("students", "course", "Kursi")}</th>
                     <th className={thClass}>{sortButton("students", "group", "Muaji")}</th>
                     <th className={thClass}>{sortButton("students", "studentGroup", "Grupi")}</th>
                     <th className={thClass}>{sortButton("students", "status", "Statusi")}</th>
                     <th className={thClass}>{sortButton("students", "payment", "Pagesa")}</th>
-                    <th className={thClass}>{sortButton("students", "teacherName", "Mësuesi")}</th>
+                    <th className={thClass}>{sortButton("students", "teacherName", "MÃ«suesi")}</th>
                     <th className={thClass}>Veprime</th>
                   </tr>
                 </thead>
@@ -3623,10 +3927,6 @@ export default function App() {
                         <td className={tdClass}>{index + 1}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingStudentFirstName} onChange={(e) => setEditingStudentFirstName(e.target.value)} /> : (student.firstName || student.name)}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingStudentLastName} onChange={(e) => setEditingStudentLastName(e.target.value)} /> : (student.lastName || "-")}</td>
-                        <td className={tdClass}>{isEditing ? <input className={input} value={editingStudentAge} onChange={(e) => setEditingStudentAge(e.target.value)} type="number" min="0" /> : (student.age || "-")}</td>
-                        <td className={tdClass}>{isEditing ? <input className={input} value={editingStudentCity} onChange={(e) => setEditingStudentCity(e.target.value)} /> : (student.city || "-")}</td>
-                        <td className={tdClass}>{isEditing ? <input className={input} value={editingStudentPhone} onChange={(e) => setEditingStudentPhone(e.target.value)} /> : (student.phone || "-")}</td>
-                        <td className={tdClass}>{isEditing ? <input className={input} value={editingStudentEmail} onChange={(e) => setEditingStudentEmail(e.target.value)} type="email" /> : (student.email || "-")}</td>
                         <td className={tdClass}>{isEditing ? (
                           <SearchableSelect
                             className={input}
@@ -3646,7 +3946,9 @@ export default function App() {
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingStudentStudentGroup} onChange={(e) => setEditingStudentStudentGroup(e.target.value)} placeholder="gr1" /> : (student.studentGroup || "-")}</td>
                         <td className={tdClass}>{enrollmentStatusLabel(student.enrollmentStatus)}</td>
                         <td className={tdClass}>
-                          {hasPayment && !isEditing ? (
+                          {isTeacherUser && !sameId(student.teacherId, currentTeacherId) ? (
+                            "-"
+                          ) : hasPayment && !isEditing ? (
                             <img
                               src={doneIcon}
                               alt="E paguar"
@@ -3674,16 +3976,16 @@ export default function App() {
                               className={input}
                               value={editingStudentTeacherId}
                               onChange={setEditingStudentTeacherId}
-                              placeholder="Zgjedh mësuesin"
+                              placeholder="Zgjedh mÃ«suesin"
                               options={[
-                                { value: "", label: "Zgjedh mësuesin" },
+                                { value: "", label: "Zgjedh mÃ«suesin" },
                                 ...sortedTeachersAlpha.map((teacherOption) => ({
                                   value: teacherOption.id,
                                   label: teacherOption.name,
                                 })),
                               ]}
                             />
-                          ) : (teacher?.name || "Pa mësues")}
+                          ) : (teacher?.name || "Pa mÃ«sues")}
                         </td>
                         <td className={tdClass}>
                           <div className="flex flex-wrap gap-2">
@@ -3694,12 +3996,13 @@ export default function App() {
                               </>
                             ) : canManageData ? (
                               <>
+                                <button onClick={(e) => { e.stopPropagation(); setDetailsStudentId(student.id); }} className={smallBtn} style={primaryBtnStyle}>{actionLabel("information", "Shfaq tÃ« dhÃ«nat")}</button>
                                 <button onClick={(e) => { e.stopPropagation(); startEditStudent(student); }} className={smallBtn} style={secondaryBtnStyle}>{actionLabel("edit", "Edit")}</button>
-                                <button onClick={(e) => { e.stopPropagation(); openEnrollmentModal(student); }} className={smallBtn} style={primaryBtnStyle}>Kurset</button>
+                                <button onClick={(e) => { e.stopPropagation(); openEnrollmentModal(student); }} className={smallBtn} style={primaryBtnStyle}>{actionLabel("courses", "Kurset")}</button>
                                 <button onClick={(e) => { e.stopPropagation(); archiveStudent(student); }} className={smallBtn} style={warningBtnStyle}>{actionLabel("archive", "Archive")}</button>
                               </>
                             ) : (
-                              <span className="text-gray-500">Vetëm lexim</span>
+                              <button onClick={(e) => { e.stopPropagation(); setDetailsStudentId(student.id); }} className={smallBtn} style={primaryBtnStyle}>{actionLabel("information", "Shfaq tÃ« dhÃ«nat")}</button>
                             )}
                           </div>
                         </td>
@@ -3716,14 +4019,14 @@ export default function App() {
           <div className={`border rounded-lg lg:rounded-2xl shadow-sm ${card} p-3 sm:p-4`}>
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
               <div>
-                <h2 className="text-2xl font-bold" style={{ color: PRIMARY }}>Mësuesit</h2>
-                <p className="text-gray-500">Kliko një mësues për t’i parë nxënësit e tij poshtë.</p>
+                <h2 className="text-2xl font-bold" style={{ color: PRIMARY }}>MÃ«suesit</h2>
+                <p className="text-gray-500">Kliko njÃ« mÃ«sues pÃ«r tâ€™i parÃ« nxÃ«nÃ«sit e tij poshtÃ«.</p>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full lg:w-[44rem]">
                 {searchField({
                   value: teacherSearch,
                   onChange: (e) => setTeacherSearch(e.target.value),
-                  placeholder: "Kërko sipas emrit ose nxënësve",
+                  placeholder: "KÃ«rko sipas emrit ose nxÃ«nÃ«sve",
                 })}
                 <input className={dateInput} type="month" value={teacherMonthFilter} onChange={(e) => setTeacherMonthFilter(e.target.value)} />
                 <button onClick={() => setTeacherMonthFilter("")} className={mainBtn} style={secondaryBtnStyle}>
@@ -3740,9 +4043,9 @@ export default function App() {
                 className={mainBtn}
                 style={teachers.length ? primaryBtnStyle : disabledPrimaryBtnStyle}
               >
-                {actionLabel("assign", "Cakto nxënësit")}
+                {actionLabel("assign", "Cakto nxÃ«nÃ«sit")}
               </button>
-              <button onClick={() => setIsTeacherModalOpen(true)} className={mainBtn} style={secondaryBtnStyle}>{actionLabel("add", "Shto mësues")}</button>
+              <button onClick={() => setIsTeacherModalOpen(true)} className={mainBtn} style={secondaryBtnStyle}>{actionLabel("add", "Shto mÃ«sues")}</button>
             </div>
             )}
 
@@ -3754,8 +4057,8 @@ export default function App() {
                     <th className={thClass}>{sortButton("teachers", "name", "Emri")}</th>
                     <th className={thClass}>{sortButton("teachers", "lastName", "Mbiemri")}</th>
                     <th className={thClass}>{sortButton("teachers", "email", "Email")}</th>
-                    <th className={thClass}>Përqindja</th>
-                    <th className={thClass}>{sortButton("teachers", "studentsCount", "Nxënës")}</th>
+                    <th className={thClass}>PÃ«rqindja</th>
+                    <th className={thClass}>{sortButton("teachers", "studentsCount", "NxÃ«nÃ«s")}</th>
                     <th className={thClass}>Veprime</th>
                   </tr>
                 </thead>
@@ -3782,7 +4085,7 @@ export default function App() {
                             className={input}
                             value={editingTeacherPercent}
                             onChange={setEditingTeacherPercent}
-                            placeholder="Përqindja"
+                            placeholder="PÃ«rqindja"
                             options={percentOptions.map((percent) => ({ value: percent, label: `${percent}%` }))}
                           />
                         ) : `${teacher.percent}%`}</td>
@@ -3800,7 +4103,7 @@ export default function App() {
                                 <button onClick={(e) => { e.stopPropagation(); archiveTeacher(teacher); }} className={smallBtn} style={warningBtnStyle}>{actionLabel("archive", "Archive")}</button>
                               </>
                             ) : (
-                              <span className="text-gray-500">Vetëm lexim</span>
+                              <span className="text-gray-500">VetÃ«m lexim</span>
                             )}
                           </div>
                         </td>
@@ -3813,7 +4116,7 @@ export default function App() {
 
             {selectedTeacherView && (
               <div className="mt-6 border rounded-lg lg:rounded-2xl p-3 sm:p-4 bg-gray-50 border-gray-200">
-                <h3 className="text-lg font-bold mb-3" style={{ color: PRIMARY }}>Nxënësit e mësuesit të zgjedhur</h3>
+                <h3 className="text-lg font-bold mb-3" style={{ color: PRIMARY }}>NxÃ«nÃ«sit e mÃ«suesit tÃ« zgjedhur</h3>
                 <div className={tableWrap}>
                   <table className="min-w-[48rem] w-full text-sm">
                     <thead>
@@ -3841,7 +4144,7 @@ export default function App() {
                       ) : (
                         <tr>
                           <td className={tdClass} colSpan={6}>
-                            {teacherMonthFilter ? "Ky mësues nuk ka nxënës për këtë muaj." : "Ky mësues nuk ka nxënës."}
+                            {teacherMonthFilter ? "Ky mÃ«sues nuk ka nxÃ«nÃ«s pÃ«r kÃ«tÃ« muaj." : "Ky mÃ«sues nuk ka nxÃ«nÃ«s."}
                           </td>
                         </tr>
                       )}
@@ -3858,24 +4161,24 @@ export default function App() {
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
               <div>
                 <h2 className="text-2xl font-bold" style={{ color: PRIMARY }}>Pagesat</h2>
-                <p className="text-gray-500">Menaxho pagesat dhe filtro sipas studentit, mësuesit ose datës.</p>
+                <p className="text-gray-500">Menaxho pagesat dhe filtro sipas studentit, mÃ«suesit ose datÃ«s.</p>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 w-full xl:w-[56rem]">
                 {searchField({
                   value: paymentSearch,
                   onChange: (e) => setPaymentSearch(e.target.value),
-                  placeholder: "Kërko pagesa",
+                  placeholder: "KÃ«rko pagesa",
                 })}
                 <SearchableSelect
                   className={input}
                   value={isTeacherUser ? currentTeacherAccount?.name || "" : activePaymentTeacherFilter}
                   onChange={isTeacherUser ? () => {} : setPaymentTeacherFilter}
-                  placeholder="Të gjithë mësuesit"
+                  placeholder="TÃ« gjithÃ« mÃ«suesit"
                   disabled={isTeacherUser}
                   options={isTeacherUser
-                    ? [{ value: currentTeacherAccount?.name || "", label: currentTeacherAccount?.name || "Mësuesi" }]
+                    ? [{ value: currentTeacherAccount?.name || "", label: currentTeacherAccount?.name || "MÃ«suesi" }]
                     : [
-                        { value: "", label: "Të gjithë mësuesit" },
+                        { value: "", label: "TÃ« gjithÃ« mÃ«suesit" },
                         ...sortedTeachersAlpha.map((teacher) => ({ value: teacher.name, label: teacher.name })),
                       ]}
                 />
@@ -3888,7 +4191,7 @@ export default function App() {
 
             {canManageData && (
             <div className="flex justify-end mb-6">
-              <button onClick={openPaymentModal} className={mainBtn} style={secondaryBtnStyle}>{actionLabel("add", "Shto pagesë")}</button>
+              <button onClick={openPaymentModal} className={mainBtn} style={secondaryBtnStyle}>{actionLabel("add", "Shto pagesÃ«")}</button>
             </div>
             )}
 
@@ -3897,11 +4200,11 @@ export default function App() {
                 <thead>
                   <tr className="border-b border-gray-200">
                     <th className={thClass}>Nr</th>
-                    <th className={thClass}>{sortButton("payments", "studentName", "Nxënësi")}</th>
-                    <th className={thClass}>{sortButton("payments", "teacherName", "Mësuesi")}</th>
+                    <th className={thClass}>{sortButton("payments", "studentName", "NxÃ«nÃ«si")}</th>
+                    <th className={thClass}>{sortButton("payments", "teacherName", "MÃ«suesi")}</th>
                     <th className={thClass}>{sortButton("payments", "amount", "Shuma")}</th>
-                    <th className={thClass}>Orët</th>
-                    <th className={thClass}>€/orë</th>
+                    <th className={thClass}>OrÃ«t</th>
+                    <th className={thClass}>â‚¬/orÃ«</th>
                     <th className={thClass}>{sortButton("payments", "date", "Data")}</th>
                     <th className={thClass}>{sortButton("payments", "note", "Shenime")}</th>
                     <th className={thClass}>Veprime</th>
@@ -3914,19 +4217,33 @@ export default function App() {
                       <tr key={payment.id} className={rowHover}>
                         <td className={tdClass}>{index + 1}</td>
                         <td className={tdClass}>{isEditing ? (
-                          <SearchableSelect
-                            className={input}
-                            value={editingPaymentStudentId}
-                            onChange={changeEditingPaymentStudent}
-                            placeholder="Zgjedh nxënësin"
-                            options={[
-                              { value: "", label: "Zgjedh nxënësin" },
-                              ...sortedStudentsAlpha.map((student) => ({
-                                value: student.id,
-                                label: studentOptionLabel(student),
-                              })),
-                            ]}
-                          />
+                          <div className="space-y-2">
+                            <SearchableSelect
+                              className={input}
+                              value={editingPaymentStudentId}
+                              onChange={changeEditingPaymentStudent}
+                              placeholder="Zgjedh nxÃ«nÃ«sin"
+                              options={[
+                                { value: "", label: "Zgjedh nxÃ«nÃ«sin" },
+                                ...sortedStudentsAlpha.map((student) => ({
+                                  value: student.id,
+                                  label: studentOptionLabel(student),
+                                })),
+                              ]}
+                            />
+                            {editingPaymentEnrollmentOptions.length > 1 && (
+                              <SearchableSelect
+                                className={input}
+                                value={editingPaymentEnrollmentId}
+                                onChange={changeEditingPaymentEnrollment}
+                                placeholder="Zgjedh kursin"
+                                options={editingPaymentEnrollmentOptions.map((enrollment) => ({
+                                  value: enrollment.id,
+                                  label: paymentEnrollmentLabel(enrollment),
+                                }))}
+                              />
+                            )}
+                          </div>
                         ) : payment.studentName}</td>
                         <td className={tdClass}>{payment.teacherName}</td>
                         <td className={tdClass}>{isEditing ? (
@@ -3947,7 +4264,7 @@ export default function App() {
                             {isEditing ? (
                               <>
                                 <button onClick={saveEditPayment} className={smallBtn} style={primaryBtnStyle}>Save</button>
-                                <button onClick={() => { setEditingPaymentId(null); setEditingPaymentDate(""); setEditingPaymentNote(""); setEditingPaymentHours(""); setEditingPaymentRate(""); setEditingPaymentType("fixed"); }} className={smallBtn} style={secondaryBtnStyle}>Cancel</button>
+                                <button onClick={() => { setEditingPaymentId(null); setEditingPaymentEnrollmentId(""); setEditingPaymentDate(""); setEditingPaymentNote(""); setEditingPaymentHours(""); setEditingPaymentRate(""); setEditingPaymentType("fixed"); }} className={smallBtn} style={secondaryBtnStyle}>Cancel</button>
                               </>
                             ) : canManageData ? (
                               <>
@@ -3955,7 +4272,7 @@ export default function App() {
                                 <button onClick={() => archivePayment(payment)} className={smallBtn} style={warningBtnStyle}>{actionLabel("archive", "Archive")}</button>
                               </>
                             ) : (
-                              <span className="text-gray-500">Vetëm lexim</span>
+                              <span className="text-gray-500">VetÃ«m lexim</span>
                             )}
                           </div>
                         </td>
@@ -3973,7 +4290,7 @@ export default function App() {
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
               <div>
                 <h2 className="text-2xl font-bold" style={{ color: PRIMARY }}>Paga</h2>
-                <p className="text-gray-500">Paga e mësuesve sipas përqindjes, me export Excel/PDF.</p>
+                <p className="text-gray-500">Paga e mÃ«suesve sipas pÃ«rqindjes, me export Excel/PDF.</p>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 w-full xl:w-auto">
                 <input className={dateInput} type="month" value={financeMonth} onChange={(e) => setFinanceMonth(e.target.value)} />
@@ -3989,12 +4306,12 @@ export default function App() {
                           setFinanceTeacherFilter(nextTeacher);
                         }
                   }
-                  placeholder="Të gjithë mësuesit"
+                  placeholder="TÃ« gjithÃ« mÃ«suesit"
                   disabled={isTeacherUser}
                   options={isTeacherUser
-                    ? [{ value: currentTeacherAccount?.name || "", label: currentTeacherAccount?.name || "Mësuesi" }]
+                    ? [{ value: currentTeacherAccount?.name || "", label: currentTeacherAccount?.name || "MÃ«suesi" }]
                     : [
-                        { value: "", label: "Të gjithë mësuesit" },
+                        { value: "", label: "TÃ« gjithÃ« mÃ«suesit" },
                         ...sortedTeachersAlpha.map((teacher) => ({ value: teacher.name, label: teacher.name })),
                       ]}
                 />
@@ -4008,11 +4325,11 @@ export default function App() {
                 <thead>
                   <tr className="border-b border-gray-200">
                     <th className={thClass}>Nr</th>
-                    <th className={thClass}>{sortButton("paga", "name", "Mësuesi")}</th>
+                    <th className={thClass}>{sortButton("paga", "name", "MÃ«suesi")}</th>
                     <th className={thClass}>%</th>
-                    <th className={thClass}>{sortButton("paga", "studentsCount", "Nxënës")}</th>
+                    <th className={thClass}>{sortButton("paga", "studentsCount", "NxÃ«nÃ«s")}</th>
                     <th className={thClass}>{sortButton("paga", "total", "Total")}</th>
-                    <th className={thClass}>{sortButton("paga", "teacherShare", "Mësuesi")}</th>
+                    <th className={thClass}>{sortButton("paga", "teacherShare", "MÃ«suesi")}</th>
                     <th className={thClass}>{sortButton("paga", "adminShare", "Administrata")}</th>
                     <th className={thClass}>{sortButton("paga", "schoolShare", "Shkolla")}</th>
                     <th className={thClass}>{sortButton("paga", "remainingShare", "Mbetja")}</th>
@@ -4063,7 +4380,7 @@ export default function App() {
             {selectedPagaTeacherView && (
               <div className="mt-6 border rounded-lg lg:rounded-2xl p-3 sm:p-4 bg-gray-50 border-gray-200">
                 <h3 className="text-lg font-bold mb-3" style={{ color: PRIMARY }}>
-                  Nxënësit që kanë paguar {selectedPagaTeacher ? `- ${selectedPagaTeacher.name}` : ""}
+                  NxÃ«nÃ«sit qÃ« kanÃ« paguar {selectedPagaTeacher ? `- ${selectedPagaTeacher.name}` : ""}
                 </h3>
                 <div className={tableWrap}>
                   <table className="min-w-[42rem] w-full text-sm">
@@ -4088,7 +4405,7 @@ export default function App() {
                           </tr>
                         ))
                       ) : (
-                        <tr><td className={tdClass} colSpan={5}>Ky mësues nuk ka nxënës me pagesë për këtë muaj.</td></tr>
+                        <tr><td className={tdClass} colSpan={5}>Ky mÃ«sues nuk ka nxÃ«nÃ«s me pagesÃ« pÃ«r kÃ«tÃ« muaj.</td></tr>
                       )}
                     </tbody>
                   </table>
@@ -4104,7 +4421,7 @@ export default function App() {
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
               <div>
                 <h2 className="text-2xl font-bold" style={{ color: PRIMARY }}>Financa</h2>
-                <p className="text-gray-500">Overview + shpenzimet e shkollës.</p>
+                <p className="text-gray-500">Overview + shpenzimet e shkollÃ«s.</p>
               </div>
               <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-2 lg:w-[24rem]">
                 <input className={dateInput} type="month" value={financeOverviewMonth} onChange={(e) => setFinanceOverviewMonth(e.target.value)} />
@@ -4116,11 +4433,11 @@ export default function App() {
 
             <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-4">
               <div className="p-4 rounded-xl border">
-                <div className="text-gray-500 text-sm">Të hyrat totale</div>
+                <div className="text-gray-500 text-sm">TÃ« hyrat totale</div>
                 <div className="text-xl font-bold">{formatCurrency(overviewIncome)}</div>
               </div>
               <div className="p-4 rounded-xl border">
-                <div className="text-gray-500 text-sm">Pagat e mësuesve</div>
+                <div className="text-gray-500 text-sm">Pagat e mÃ«suesve</div>
                 <div className="text-xl font-bold">{formatCurrency(overviewTeacherPay)}</div>
               </div>
               <div className="p-4 rounded-xl border">
@@ -4136,7 +4453,7 @@ export default function App() {
                 </div>
               </div>
               <div className="p-4 rounded-xl border">
-                <div className="text-gray-500 text-sm">Buxheti i shkollës</div>
+                <div className="text-gray-500 text-sm">Buxheti i shkollÃ«s</div>
                 <div className="text-xl font-bold">{formatCurrency(overviewProfit)}</div>
               </div>
               <div className="p-4 rounded-xl border">
@@ -4164,7 +4481,7 @@ export default function App() {
                     <th className={thClass}>Nr</th>
                     <th className={thClass}>{sortButton("finance", "name", "Produkti")}</th>
                     <th className={thClass}>{sortButton("finance", "date", "Data")}</th>
-                    <th className={thClass}>{sortButton("finance", "amount", "Çmimi")}</th>
+                    <th className={thClass}>{sortButton("finance", "amount", "Ã‡mimi")}</th>
                     <th className={thClass}>Shenime</th>
                     <th className={thClass}>Veprime</th>
                   </tr>
@@ -4208,13 +4525,13 @@ export default function App() {
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
               <div>
                 <h2 className="text-2xl font-bold" style={{ color: PRIMARY }}>Kurset</h2>
-                <p className="text-gray-500">Menaxho kurset dhe çmimet.</p>
+                <p className="text-gray-500">Menaxho kurset dhe Ã§mimet.</p>
               </div>
               <div className="w-full lg:w-80">
                 {searchField({
                   value: courseSearch,
                   onChange: (e) => setCourseSearch(e.target.value),
-                  placeholder: "Kërko sipas kursit ose çmimit",
+                  placeholder: "KÃ«rko sipas kursit ose Ã§mimit",
                 })}
               </div>
             </div>
@@ -4232,7 +4549,7 @@ export default function App() {
                     <th className={thClass}>Nr</th>
                     <th className={thClass}>{sortButton("courses", "name", "Emri i kursit")}</th>
                     <th className={thClass}>{sortButton("courses", "pricingType", "Lloji")}</th>
-                    <th className={thClass}>{sortButton("courses", "price", "Çmimi")}</th>
+                    <th className={thClass}>{sortButton("courses", "price", "Ã‡mimi")}</th>
                     <th className={thClass}>Veprime</th>
                   </tr>
                 </thead>
@@ -4266,7 +4583,7 @@ export default function App() {
                                 <button onClick={() => archiveCourse(course)} className={smallBtn} style={warningBtnStyle}>{actionLabel("archive", "Archive")}</button>
                               </>
                             ) : (
-                              <span className="text-gray-500">Vetëm lexim</span>
+                              <span className="text-gray-500">VetÃ«m lexim</span>
                             )}
                           </div>
                         </td>
@@ -4284,20 +4601,20 @@ export default function App() {
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
               <div>
                 <h2 className="text-2xl font-bold" style={{ color: PRIMARY }}>Arkiva</h2>
-                <p className="text-gray-500">Këtu ruhen të dhënat e arkivuara dhe mund t’i kthesh prapë aktive.</p>
+                <p className="text-gray-500">KÃ«tu ruhen tÃ« dhÃ«nat e arkivuara dhe mund tâ€™i kthesh prapÃ« aktive.</p>
               </div>
               <div className="w-full lg:w-80">
                 {searchField({
                   value: archiveSearch,
                   onChange: (e) => setArchiveSearch(e.target.value),
-                  placeholder: "Kërko në archive",
+                  placeholder: "KÃ«rko nÃ« archive",
                 })}
               </div>
             </div>
 
             <div>
               <div className="flex items-center justify-between mb-3">
-                <h3 className="text-lg font-bold" style={{ color: PRIMARY }}>Nxënës</h3>
+                <h3 className="text-lg font-bold" style={{ color: PRIMARY }}>NxÃ«nÃ«s</h3>
                 <div className="flex gap-2">
                   <button onClick={() => bulkRestore("students")} disabled={!archiveSelection.students.length} className={smallBtn} style={archiveSelection.students.length ? primaryBtnStyle : disabledPrimaryBtnStyle}>{actionLabel("restore", "Restore Selected")}</button>
                   <button onClick={() => bulkDeleteArchived("students")} disabled={!archiveSelection.students.length} className={smallBtn} style={archiveSelection.students.length ? dangerBtnStyle : { background: "#d1d5db", color: "#6b7280", cursor: "not-allowed" }}>{actionLabel("delete", "Delete Selected")}</button>
@@ -4310,7 +4627,7 @@ export default function App() {
                       <th className={thClass}>Nr</th>
                       <th className={thClass}>#</th>
                       <th className={thClass}>{sortButton("archive", "name", "Emri")}</th>
-                      <th className={thClass}>{sortButton("archive", "teacherName", "Mësuesi")}</th>
+                      <th className={thClass}>{sortButton("archive", "teacherName", "MÃ«suesi")}</th>
                       <th className={thClass}>Veprimi</th>
                     </tr>
                   </thead>
@@ -4339,7 +4656,7 @@ export default function App() {
 
             <div>
               <div className="flex items-center justify-between mb-3">
-                <h3 className="text-lg font-bold" style={{ color: PRIMARY }}>Mësues</h3>
+                <h3 className="text-lg font-bold" style={{ color: PRIMARY }}>MÃ«sues</h3>
                 <div className="flex gap-2">
                   <button onClick={() => bulkRestore("teachers")} disabled={!archiveSelection.teachers.length} className={smallBtn} style={archiveSelection.teachers.length ? primaryBtnStyle : disabledPrimaryBtnStyle}>{actionLabel("restore", "Restore Selected")}</button>
                   <button onClick={() => bulkDeleteArchived("teachers")} disabled={!archiveSelection.teachers.length} className={smallBtn} style={archiveSelection.teachers.length ? dangerBtnStyle : { background: "#d1d5db", color: "#6b7280", cursor: "not-allowed" }}>{actionLabel("delete", "Delete Selected")}</button>
@@ -4392,8 +4709,8 @@ export default function App() {
                     <tr className="border-b border-gray-200">
                       <th className={thClass}>Nr</th>
                       <th className={thClass}>#</th>
-                      <th className={thClass}>Nxënësi</th>
-                      <th className={thClass}>Mësuesi</th>
+                      <th className={thClass}>NxÃ«nÃ«si</th>
+                      <th className={thClass}>MÃ«suesi</th>
                       <th className={thClass}>Shuma</th>
                       <th className={thClass}>Data</th>
                       <th className={thClass}>Veprimi</th>
@@ -4405,7 +4722,7 @@ export default function App() {
                         <td className={tdClass}>{index + 1}</td>
                         <td className={tdClass}><input type="checkbox" className={roundCheckbox} checked={archiveSelection.payments.includes(payment.id)} onChange={() => toggleArchiveSelection("payments", payment.id)} /></td>
                         <td className={tdClass}>{payment.studentName || "Pa student"}</td>
-                        <td className={tdClass}>{payment.teacherName || "Pa mësues"}</td>
+                        <td className={tdClass}>{payment.teacherName || "Pa mÃ«sues"}</td>
                         <td className={tdClass}>{formatCurrency(payment.amount)}</td>
                         <td className={tdClass}>{formatDateDisplay(payment.date)}</td>
                         <td className={tdClass}>
@@ -4437,7 +4754,7 @@ export default function App() {
                       <th className={thClass}>#</th>
                       <th className={thClass}>{sortButton("archiveExpenses", "name", "Produkti")}</th>
                       <th className={thClass}>{sortButton("archiveExpenses", "date", "Data")}</th>
-                      <th className={thClass}>{sortButton("archiveExpenses", "amount", "Çmimi")}</th>
+                      <th className={thClass}>{sortButton("archiveExpenses", "amount", "Ã‡mimi")}</th>
                       <th className={thClass}>Shenime</th>
                       <th className={thClass}>Veprimi</th>
                     </tr>
@@ -4480,7 +4797,7 @@ export default function App() {
                       <th className={thClass}>#</th>
                       <th className={thClass}>{sortButton("courses", "name", "Emri i kursit")}</th>
                       <th className={thClass}>{sortButton("courses", "pricingType", "Lloji")}</th>
-                      <th className={thClass}>{sortButton("courses", "price", "Çmimi")}</th>
+                      <th className={thClass}>{sortButton("courses", "price", "Ã‡mimi")}</th>
                       <th className={thClass}>Veprimi</th>
                     </tr>
                   </thead>
@@ -4507,15 +4824,45 @@ export default function App() {
           </div>
         )}
 
+        {selectedDetailsStudent && (
+          <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center overflow-y-auto bg-black/40 p-3 sm:p-4" onClick={() => setDetailsStudentId(null)}>
+            <div className="my-4 w-full max-w-2xl rounded-lg bg-white p-4 sm:p-6 shadow-xl space-y-4" onClick={(e) => e.stopPropagation()}>
+              <div>
+                <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>TÃ« dhÃ«nat e nxÃ«nÃ«sit</h3>
+                <p className="text-sm text-gray-500">{selectedDetailsStudent.name}</p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Emri</span><span className="font-medium">{selectedDetailsStudent.firstName || "-"}</span></div>
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Mbiemri</span><span className="font-medium">{selectedDetailsStudent.lastName || "-"}</span></div>
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Mosha</span><span className="font-medium">{selectedDetailsStudent.age || "-"}</span></div>
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Qyteti</span><span className="font-medium">{selectedDetailsStudent.city || "-"}</span></div>
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Telefoni</span><span className="font-medium">{selectedDetailsStudent.phone || "-"}</span></div>
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Emaili</span><span className="font-medium">{selectedDetailsStudent.email || "-"}</span></div>
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Kursi</span><span className="font-medium">{selectedDetailsStudent.course || "-"}</span></div>
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Muaji</span><span className="font-medium">{formatMonthYear(selectedDetailsStudent.group)}</span></div>
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Grupi</span><span className="font-medium">{selectedDetailsStudent.studentGroup || "-"}</span></div>
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">MÃ«suesi</span><span className="font-medium">{selectedDetailsStudent.teacherName || "Pa mÃ«sues"}</span></div>
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Statusi</span><span className="font-medium">{enrollmentStatusLabel(selectedDetailsStudent.enrollmentStatus)}</span></div>
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Pagesa</span><span className="font-medium">{isTeacherUser && !sameId(selectedDetailsStudent.teacherId, currentTeacherId) ? "-" : hasStudentCurrentPayment(selectedDetailsStudent) ? "E paguar" : "Pa paguar"}</span></div>
+              </div>
+
+              <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+                <button type="button" onClick={() => setDetailsStudentId(null)} className={smallBtn} style={secondaryBtnStyle}>Close</button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {isEnrollmentModalOpen && (
           <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center overflow-y-auto bg-black/40 p-3 sm:p-4" onClick={() => setIsEnrollmentModalOpen(false)}>
             <div className="my-4 w-full max-w-5xl rounded-lg bg-white p-4 sm:p-6 shadow-xl space-y-5" onClick={(e) => e.stopPropagation()}>
               <div className="flex flex-col gap-1">
                 <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>
-                  Kurset e nxënësit {selectedEnrollmentStudent ? `- ${selectedEnrollmentStudent.name}` : ""}
+                  Kurset e nxÃ«nÃ«sit {selectedEnrollmentStudent ? `- ${selectedEnrollmentStudent.name}` : ""}
                 </h3>
                 <p className="text-sm text-gray-500">
-                  Mbaje historikun e kurseve pa e humbur pagesën e vjetër.
+                  Mbaje historikun e kurseve pa e humbur pagesÃ«n e vjetÃ«r.
                 </p>
               </div>
 
@@ -4526,10 +4873,10 @@ export default function App() {
                       <th className={thClass}>{sortButton("enrollments", "group", "Muaji")}</th>
                       <th className={thClass}>{sortButton("enrollments", "course", "Kursi")}</th>
                       <th className={thClass}>{sortButton("enrollments", "studentGroup", "Grupi")}</th>
-                      <th className={thClass}>{sortButton("enrollments", "teacherName", "Mësuesi")}</th>
+                      <th className={thClass}>{sortButton("enrollments", "teacherName", "MÃ«suesi")}</th>
                       <th className={thClass}>{sortButton("enrollments", "status", "Statusi")}</th>
                       <th className={thClass}>Deri</th>
-                      <th className={thClass}>Shënime</th>
+                      <th className={thClass}>ShÃ«nime</th>
                       <th className={thClass}>Veprime</th>
                     </tr>
                   </thead>
@@ -4542,7 +4889,7 @@ export default function App() {
                             <td className={tdClass}>{formatMonthYear(enrollment.group)}</td>
                             <td className={tdClass}>{enrollment.course || "-"}</td>
                             <td className={tdClass}>{enrollment.studentGroup || "-"}</td>
-                            <td className={tdClass}>{teacher?.name || enrollment.teacherName || "Pa mësues"}</td>
+                            <td className={tdClass}>{teacher?.name || enrollment.teacherName || "Pa mÃ«sues"}</td>
                             <td className={tdClass}>{enrollmentStatusLabel(enrollment.status)}</td>
                             <td className={tdClass}>{formatMonthYear(enrollment.endMonth)}</td>
                             <td className={tdClass}>{enrollment.note || "-"}</td>
@@ -4558,7 +4905,7 @@ export default function App() {
                                 )}
                                 {enrollment.status === "active" && (
                                   <button type="button" onClick={() => updateEnrollmentStatus(enrollment, "completed")} className={smallBtn} style={warningBtnStyle}>
-                                    Përfundo
+                                    PÃ«rfundo
                                   </button>
                                 )}
                                 {enrollment.status !== "inactive" && (
@@ -4572,7 +4919,7 @@ export default function App() {
                         );
                       })
                     ) : (
-                      <tr><td className={tdClass} colSpan={8}>Ky nxënës ende nuk ka historik kursi.</td></tr>
+                      <tr><td className={tdClass} colSpan={8}>Ky nxÃ«nÃ«s ende nuk ka historik kursi.</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -4580,7 +4927,7 @@ export default function App() {
 
               <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 sm:p-4">
                 <h4 className="mb-3 font-bold" style={{ color: PRIMARY }}>
-                  {editingEnrollmentId ? "Ndrysho regjistrimin" : "Shto regjistrim të ri"}
+                  {editingEnrollmentId ? "Ndrysho regjistrimin" : "Shto regjistrim tÃ« ri"}
                 </h4>
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                   <SearchableSelect
@@ -4597,9 +4944,9 @@ export default function App() {
                     className={input}
                     value={enrollmentForm.teacherId}
                     onChange={(nextValue) => setEnrollmentForm((prev) => ({ ...prev, teacherId: nextValue }))}
-                    placeholder="Pa mësues"
+                    placeholder="Pa mÃ«sues"
                     options={[
-                      { value: "", label: "Pa mësues" },
+                      { value: "", label: "Pa mÃ«sues" },
                       ...sortedTeachersAlpha.map((teacher) => ({ value: teacher.id, label: teacher.name })),
                     ]}
                   />
@@ -4613,7 +4960,7 @@ export default function App() {
                     options={enrollmentStatusOptions}
                   />
                   <input className={dateInput} type="month" value={enrollmentForm.endMonth} onChange={(e) => setEnrollmentForm((prev) => ({ ...prev, endMonth: e.target.value }))} aria-label="Deri" title="Deri" disabled={enrollmentForm.status === "active"} />
-                  <input className={`${input} md:col-span-2`} value={enrollmentForm.note} onChange={(e) => setEnrollmentForm((prev) => ({ ...prev, note: e.target.value }))} placeholder="Shënime" />
+                  <input className={`${input} md:col-span-2`} value={enrollmentForm.note} onChange={(e) => setEnrollmentForm((prev) => ({ ...prev, note: e.target.value }))} placeholder="ShÃ«nime" />
                 </div>
                 <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:justify-end">
                   {editingEnrollmentId && (
@@ -4646,7 +4993,7 @@ export default function App() {
             >
               <div>
                 <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>{paymentModalTitle}</h3>
-                <p className="text-sm text-gray-500">Zgjedh nxënësin dhe përcakto ndarjen e pagesës.</p>
+                <p className="text-sm text-gray-500">Zgjedh nxÃ«nÃ«sin dhe pÃ«rcakto ndarjen e pagesÃ«s.</p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -4654,25 +5001,37 @@ export default function App() {
                   className={input}
                   value={selectedStudent}
                   onChange={changePaymentStudent}
-                  placeholder="Zgjedh nxënësin"
+                  placeholder="Zgjedh nxÃ«nÃ«sin"
                   options={[
-                    { value: "", label: "Zgjedh nxënësin" },
+                    { value: "", label: "Zgjedh nxÃ«nÃ«sin" },
                     ...sortedStudentsAlpha.map((student) => ({
                       value: student.id,
                       label: studentOptionLabel(student),
                     })),
                   ]}
                 />
+                {selectedPaymentEnrollmentOptions.length > 1 && (
+                  <SearchableSelect
+                    className={input}
+                    value={selectedPaymentEnrollmentId}
+                    onChange={changePaymentEnrollment}
+                    placeholder="Zgjedh kursin"
+                    options={selectedPaymentEnrollmentOptions.map((enrollment) => ({
+                      value: enrollment.id,
+                      label: paymentEnrollmentLabel(enrollment),
+                    }))}
+                  />
+                )}
                 {isSelectedPaymentHourly && (
                   <>
-                    <input className={input} value={paymentHours} onChange={(e) => changePaymentHours(e.target.value)} placeholder="Orët" type="number" min="0" step="0.25" required />
-                    <input className={input} value={paymentRate} onChange={(e) => changePaymentRate(e.target.value)} placeholder="Çmimi për orë" type="number" min="0" step="0.01" required />
+                    <input className={input} value={paymentHours} onChange={(e) => changePaymentHours(e.target.value)} placeholder="OrÃ«t" type="number" min="0" step="0.25" required />
+                    <input className={input} value={paymentRate} onChange={(e) => changePaymentRate(e.target.value)} placeholder="Ã‡mimi pÃ«r orÃ«" type="number" min="0" step="0.01" required />
                   </>
                 )}
                 <input className={input} value={paymentAmount} onChange={(e) => setPaymentAmount(e.target.value)} placeholder="Shuma" />
                 <DateTextInput className={dateInput} value={paymentDate} onChange={setPaymentDate} required />
                 <div className="relative min-w-0">
-                  <input className={`${input} pr-9`} type="number" min="0" max="100" step="0.01" value={paymentTeacherPercent} onChange={(e) => setPaymentTeacherPercent(e.target.value)} placeholder="Paga e mësuesit" />
+                  <input className={`${input} pr-9`} type="number" min="0" max="100" step="0.01" value={paymentTeacherPercent} onChange={(e) => setPaymentTeacherPercent(e.target.value)} placeholder="Paga e mÃ«suesit" />
                   <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-500">%</span>
                 </div>
                 <div className="relative min-w-0">
@@ -4706,13 +5065,13 @@ export default function App() {
             >
               <div>
                 <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>Shto shpenzim</h3>
-                <p className="text-sm text-gray-500">Plotëso produktin, datën dhe çmimin.</p>
+                <p className="text-sm text-gray-500">PlotÃ«so produktin, datÃ«n dhe Ã§mimin.</p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <input className={input} value={expenseName} onChange={(e) => setExpenseName(e.target.value)} placeholder="Produkti / Shpenzimi" required />
                 <DateTextInput className={dateInput} value={expenseDate} onChange={setExpenseDate} required />
-                <input className={`${input} md:col-span-2`} type="number" value={expenseAmount} onChange={(e) => setExpenseAmount(e.target.value)} placeholder="Çmimi" min="0" step="0.01" required />
+                <input className={`${input} md:col-span-2`} type="number" value={expenseAmount} onChange={(e) => setExpenseAmount(e.target.value)} placeholder="Ã‡mimi" min="0" step="0.01" required />
                 <input className={`${input} md:col-span-2`} value={expenseNote} onChange={(e) => setExpenseNote(e.target.value)} placeholder="Shenime" />
               </div>
 
@@ -4732,33 +5091,33 @@ export default function App() {
                   <img src={informationIcon} alt="" className="h-5 w-5" />
                 </span>
                 <div>
-                  <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>Të gjitha të hyrat</h3>
-                  <p className="text-sm text-gray-500">Përmbledhje prej fillimit të shkollës.</p>
+                  <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>TÃ« gjitha tÃ« hyrat</h3>
+                  <p className="text-sm text-gray-500">PÃ«rmbledhje prej fillimit tÃ« shkollÃ«s.</p>
                 </div>
               </div>
 
               <div className="grid grid-cols-1 gap-3">
                 <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
-                  <span className="font-medium">Të gjitha të hyrat e shkollës prej fillimit</span>
+                  <span className="font-medium">TÃ« gjitha tÃ« hyrat e shkollÃ«s prej fillimit</span>
                   <span className="font-bold">{formatCurrency(allTimeIncomeOverview.totalIncome)}</span>
                 </div>
                 <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
-                  <span className="font-medium">Të gjitha të hyrat e administratës prej fillimit</span>
+                  <span className="font-medium">TÃ« gjitha tÃ« hyrat e administratÃ«s prej fillimit</span>
                   <span className="font-bold">{formatCurrency(allTimeIncomeOverview.totalAdminShare)}</span>
                 </div>
                 <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
-                  <span className="font-medium">Të gjitha të hyrat që i takojnë shkollës</span>
+                  <span className="font-medium">TÃ« gjitha tÃ« hyrat qÃ« i takojnÃ« shkollÃ«s</span>
                   <span className="font-bold">{formatCurrency(allTimeIncomeOverview.totalSchoolShare)}</span>
                 </div>
               </div>
 
               <div>
-                <h4 className="mb-3 font-bold" style={{ color: PRIMARY }}>Të gjitha pagat prej fillimit për secilin mësues</h4>
+                <h4 className="mb-3 font-bold" style={{ color: PRIMARY }}>TÃ« gjitha pagat prej fillimit pÃ«r secilin mÃ«sues</h4>
                 <div className={tableWrap}>
                   <table className="min-w-[28rem] w-full text-sm">
                     <thead>
                       <tr className="border-b border-gray-200">
-                        <th className={thClass}>Mësuesi</th>
+                        <th className={thClass}>MÃ«suesi</th>
                         <th className={thClass}>Paga</th>
                       </tr>
                     </thead>
@@ -4792,7 +5151,7 @@ export default function App() {
               }}
             >
               <div>
-                <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>Shënime për eksport</h3>
+                <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>ShÃ«nime pÃ«r eksport</h3>
                 <p className="text-sm text-gray-500">Ky tekst vendoset te kolona Shenime.</p>
               </div>
 
@@ -4882,13 +5241,13 @@ export default function App() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <input className={input} value={teacherForm.firstName} onChange={(e) => setTeacherForm((prev) => ({ ...prev, firstName: e.target.value }))} placeholder="Emri" required />
                 <input className={input} value={teacherForm.lastName} onChange={(e) => setTeacherForm((prev) => ({ ...prev, lastName: e.target.value }))} placeholder="Mbiemri" required />
-                <input className={`${input} md:col-span-2`} value={teacherForm.email} onChange={(e) => setTeacherForm((prev) => ({ ...prev, email: e.target.value }))} placeholder="Emaili i mësuesit" type="email" />
+                <input className={`${input} md:col-span-2`} value={teacherForm.email} onChange={(e) => setTeacherForm((prev) => ({ ...prev, email: e.target.value }))} placeholder="Emaili i mÃ«suesit" type="email" />
                 <div className="md:col-span-2">
                   <SearchableSelect
                     className={input}
                     value={teacherForm.percent}
                     onChange={(nextValue) => setTeacherForm((prev) => ({ ...prev, percent: nextValue }))}
-                    placeholder="Përqindja"
+                    placeholder="PÃ«rqindja"
                     options={percentOptions.map((percent) => ({ value: percent, label: `${percent}%` }))}
                   />
                 </div>
@@ -4914,7 +5273,7 @@ export default function App() {
             >
               <div>
                 <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>Shto kurs</h3>
-                <p className="text-sm text-gray-500">Plotëso emrin dhe çmimin e kursit.</p>
+                <p className="text-sm text-gray-500">PlotÃ«so emrin dhe Ã§mimin e kursit.</p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -4926,7 +5285,7 @@ export default function App() {
                   placeholder="Lloji"
                   options={pricingTypeOptions}
                 />
-                <input className={input} value={courseForm.price} onChange={(e) => setCourseForm((prev) => ({ ...prev, price: e.target.value }))} placeholder="Çmimi" type="number" min="0" step="0.01" required />
+                <input className={input} value={courseForm.price} onChange={(e) => setCourseForm((prev) => ({ ...prev, price: e.target.value }))} placeholder="Ã‡mimi" type="number" min="0" step="0.01" required />
               </div>
 
               <div className="flex flex-col sm:flex-row sm:justify-end gap-2">
@@ -4992,6 +5351,86 @@ export default function App() {
           </div>
         )}
 
+        {isDuplicateMergeModalOpen && (
+          <div className="fixed inset-0 z-[60] flex items-start sm:items-center justify-center overflow-y-auto bg-black/40 p-3 sm:p-4" onClick={() => setIsDuplicateMergeModalOpen(false)}>
+            <div className="my-4 w-full max-w-4xl rounded-lg bg-white p-4 sm:p-6 shadow-xl space-y-4" onClick={(e) => e.stopPropagation()}>
+              <div>
+                <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>Bashko duplikatet</h3>
+                <p className="text-sm text-gray-500">Qetu e sheh sakte cili nxenes mbetet kryesor dhe cilat rreshta bashkohen para se ta konfirmosh.</p>
+              </div>
+
+              <div className="max-h-[60vh] space-y-4 overflow-y-auto pr-1">
+                {duplicateMergePreviewGroups.map((preview, index) => {
+                  const primaryMeta = duplicateStudentMeta(preview.primaryStudent);
+                  return (
+                    <div key={`${preview.primaryStudent.id}-${index}`} className="rounded-lg border border-gray-200 p-4 space-y-3">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <div className="text-sm text-gray-500">Grupi {index + 1}</div>
+                          <div className="text-lg font-semibold text-gray-900">{preview.primaryStudent.name}</div>
+                        </div>
+                        <span className="inline-flex w-fit items-center rounded-full bg-[#edf4ef] px-3 py-1 text-xs font-semibold text-[#2e2c80]">
+                          Ky profil mbetet kryesor
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-2 text-sm text-gray-700 sm:grid-cols-2 lg:grid-cols-3">
+                        <div><span className="font-medium">Kursi:</span> {primaryMeta.course}</div>
+                        <div><span className="font-medium">Muaji:</span> {primaryMeta.month}</div>
+                        <div><span className="font-medium">Grupi:</span> {primaryMeta.group}</div>
+                        <div><span className="font-medium">Mesuesi:</span> {primaryMeta.teacherName}</div>
+                        <div><span className="font-medium">Pagesat:</span> {primaryMeta.paymentsCount}</div>
+                        <div><span className="font-medium">Regjistrimet:</span> {primaryMeta.enrollmentsCount}</div>
+                      </div>
+
+                      {preview.latestEnrollment && (
+                        <div className="rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-600">
+                          Regjistrimi aktiv pas bashkimit:{" "}
+                          {[preview.latestEnrollment.course || "Pa kurs", formatMonthYear(preview.latestEnrollment.group), preview.latestEnrollment.studentGroup || ""]
+                            .filter(Boolean)
+                            .join(" - ")}
+                        </div>
+                      )}
+
+                      <div className="rounded-lg border border-dashed border-gray-200 px-3 py-2 text-sm text-gray-600">
+                        Kalojne {preview.movedPayments} pagesa dhe {preview.totalEnrollments} regjistrime gjithsej nen kete profil.
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="text-sm font-medium text-gray-700">Rreshtat qe bashkohen</div>
+                        {preview.duplicateStudents.map((student) => {
+                          const meta = duplicateStudentMeta(student);
+                          return (
+                            <div key={student.id} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-3">
+                              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                                <div className="font-medium text-gray-900">{student.name}</div>
+                                <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Arkivohet pas bashkimit</span>
+                              </div>
+                              <div className="mt-2 grid grid-cols-1 gap-2 text-sm text-gray-700 sm:grid-cols-2 lg:grid-cols-3">
+                                <div><span className="font-medium">Kursi:</span> {meta.course}</div>
+                                <div><span className="font-medium">Muaji:</span> {meta.month}</div>
+                                <div><span className="font-medium">Grupi:</span> {meta.group}</div>
+                                <div><span className="font-medium">Mesuesi:</span> {meta.teacherName}</div>
+                                <div><span className="font-medium">Pagesat:</span> {meta.paymentsCount}</div>
+                                <div><span className="font-medium">Regjistrimet:</span> {meta.enrollmentsCount}</div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="flex flex-col sm:flex-row sm:justify-end gap-2">
+                <button type="button" onClick={() => setIsDuplicateMergeModalOpen(false)} className={smallBtn} style={secondaryBtnStyle}>Cancel</button>
+                <button type="button" onClick={applyDuplicateStudentMerge} className={smallBtn} style={warningBtnStyle}>Bashko tani</button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {isSettingsModalOpen && (
           <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center overflow-y-auto bg-black/40 p-3 sm:p-4" onClick={() => setIsSettingsModalOpen(false)}>
             <div className="my-4 w-full max-w-md rounded-lg bg-white p-4 sm:p-6 shadow-xl space-y-4" onClick={(e) => e.stopPropagation()}>
@@ -5035,6 +5474,9 @@ export default function App() {
                     </button>
                     <button type="button" onClick={() => allDataImportRef.current?.click()} className={mainBtn} style={secondaryBtnStyle}>
                       {actionLabel("import", "Importo te gjitha")}
+                    </button>
+                    <button type="button" onClick={mergeDuplicateStudents} className={mainBtn} style={warningBtnStyle}>
+                      Bashko duplikatet ({duplicateStudentGroups.length})
                     </button>
                   </>
                 )}
