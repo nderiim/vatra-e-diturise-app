@@ -225,6 +225,8 @@ const emptyTeacherForm = {
   firstName: "",
   lastName: "",
   email: "",
+  role: "",
+  cv: "",
   percent: 80,
 };
 
@@ -494,12 +496,13 @@ export default function App() {
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [selectedTeacherView, setSelectedTeacherView] = useState(null);
   const [selectedPagaTeacherView, setSelectedPagaTeacherView] = useState(null);
-  const [selectedStudentView, setSelectedStudentView] = useState(null);
   const [detailsStudentId, setDetailsStudentId] = useState(null);
+  const [isStudentDetailsEditing, setIsStudentDetailsEditing] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isDuplicateMergeModalOpen, setIsDuplicateMergeModalOpen] = useState(false);
   const [isAllIncomeModalOpen, setIsAllIncomeModalOpen] = useState(false);
   const [isMonthEndReminderDismissed, setIsMonthEndReminderDismissed] = useState(false);
+  const [archiveConfirmState, setArchiveConfirmState] = useState(null);
   const [session, setSession] = useState(null);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [authError, setAuthError] = useState("");
@@ -573,7 +576,11 @@ export default function App() {
   const [editingTeacherFirstName, setEditingTeacherFirstName] = useState("");
   const [editingTeacherLastName, setEditingTeacherLastName] = useState("");
   const [editingTeacherEmail, setEditingTeacherEmail] = useState("");
+  const [editingTeacherRole, setEditingTeacherRole] = useState("");
   const [editingTeacherPercent, setEditingTeacherPercent] = useState(80);
+  const [detailsTeacherId, setDetailsTeacherId] = useState(null);
+  const [isTeacherDetailsEditing, setIsTeacherDetailsEditing] = useState(false);
+  const [teacherDetailsCv, setTeacherDetailsCv] = useState("");
   const [isAssignStudentsModalOpen, setIsAssignStudentsModalOpen] = useState(false);
   const [assignTeacherId, setAssignTeacherId] = useState("");
   const [assignStudentIds, setAssignStudentIds] = useState([]);
@@ -611,7 +618,6 @@ export default function App() {
     archiveExpenses: { key: "date", direction: "desc" },
   });
 
-  const percentOptions = [60, 65, 70, 75, 80];
   const studentStatusOptions = [
     { value: "active", label: "Aktiv" },
     { value: "inactive", label: "Joaktiv" },
@@ -693,9 +699,29 @@ export default function App() {
   );
 
   const clearRowSelections = () => {
-    setSelectedStudentView(null);
     setSelectedTeacherView(null);
     setSelectedPagaTeacherView(null);
+  };
+
+  const archiveEntityLabel = (type) => {
+    if (type === "student") return "nxënësin";
+    if (type === "teacher") return "anëtarin e stafit";
+    if (type === "payment") return "pagesën";
+    if (type === "course") return "kursin";
+    if (type === "expense") return "shpenzimin";
+    return "elementin";
+  };
+
+  const archiveEntityName = (type, item) => {
+    if (!item) return "";
+    if (type === "student" || type === "teacher") return item.name || [item.firstName, item.lastName].filter(Boolean).join(" ");
+    if (type === "payment") return item.studentName || "Pa emër";
+    if (type === "course" || type === "expense") return item.name || "Pa emër";
+    return item.name || "";
+  };
+
+  const requestArchiveConfirmation = (type, item) => {
+    setArchiveConfirmState({ type, item });
   };
 
   const searchField = ({ value, onChange, placeholder }) => (
@@ -854,13 +880,15 @@ export default function App() {
 
   const normalizeTeacher = (row) => ({
     id: row.id,
-  name: row.name || [row.first_name, row.last_name].filter(Boolean).join(" "),
-  firstName: row.first_name || "",
-  lastName: row.last_name || "",
-  email: row.email || "",
-  percent: Number(row.percent ?? 80),
-  archivedAt: row.archived_at,
-});
+    name: row.name || [row.first_name, row.last_name].filter(Boolean).join(" "),
+    firstName: row.first_name || "",
+    lastName: row.last_name || "",
+    email: row.email || "",
+    role: row.role || "",
+    cv: row.cv || "",
+    percent: Number(row.percent ?? 80),
+    archivedAt: row.archived_at,
+  });
 
   const normalizeCourse = (row) => ({
     id: row.id,
@@ -933,12 +961,14 @@ export default function App() {
   });
 
   const teacherToRow = (teacher) => ({
-  name: teacher.name,
-  first_name: teacher.firstName,
-  last_name: teacher.lastName,
-  email: teacher.email || null,
-  percent: Number(teacher.percent),
-});
+    name: teacher.name,
+    first_name: teacher.firstName,
+    last_name: teacher.lastName,
+    email: teacher.email || null,
+    role: teacher.role || null,
+    cv: teacher.cv || null,
+    percent: Number(teacher.percent),
+  });
 
   const courseToRow = (course) => ({
     name: course.name,
@@ -1683,6 +1713,8 @@ export default function App() {
       firstName,
       lastName,
       email: normalizeEmail(teacherForm.email),
+      role: teacherForm.role.trim(),
+      cv: teacherForm.cv.trim(),
       percent: Number(teacherForm.percent),
     };
     try {
@@ -1968,6 +2000,39 @@ export default function App() {
     }
   };
 
+  const confirmArchiveAction = async () => {
+    if (!archiveConfirmState) return;
+    const { type, item } = archiveConfirmState;
+    setArchiveConfirmState(null);
+
+    if (type === "student") {
+      closeStudentDetailsModal();
+      await archiveStudent(item);
+      return;
+    }
+
+    if (type === "teacher") {
+      closeTeacherDetailsModal();
+      setSelectedTeacherView(null);
+      await archiveTeacher(item);
+      return;
+    }
+
+    if (type === "payment") {
+      await archivePayment(item);
+      return;
+    }
+
+    if (type === "course") {
+      await archiveCourse(item);
+      return;
+    }
+
+    if (type === "expense") {
+      await archiveExpense(item);
+    }
+  };
+
   const restoreStudent = async (student) => {
     try {
       await restoreRow("students", student.id);
@@ -2156,6 +2221,18 @@ export default function App() {
     setEditingStudentTeacherId(String(student.teacherId || ""));
   };
 
+  const openStudentDetailsModal = (student) => {
+    cancelEditStudent();
+    setDetailsStudentId(student.id);
+    setIsStudentDetailsEditing(false);
+  };
+
+  const closeStudentDetailsModal = () => {
+    setDetailsStudentId(null);
+    setIsStudentDetailsEditing(false);
+    cancelEditStudent();
+  };
+
   const cancelEditStudent = () => {
     setEditingStudentId(null);
     setEditingStudentFirstName("");
@@ -2173,7 +2250,7 @@ export default function App() {
   const saveEditStudent = async () => {
     const firstName = editingStudentFirstName.trim();
     const lastName = editingStudentLastName.trim();
-    if (!firstName && !lastName) return;
+    if (!firstName && !lastName) return false;
     const nextStudent = {
       name: [firstName, lastName].filter(Boolean).join(" "),
       firstName,
@@ -2192,9 +2269,26 @@ export default function App() {
       await saveActiveEnrollmentForStudent(editingStudentId, nextStudent);
       setStudents((prev) => prev.map((student) => (student.id === editingStudentId ? savedStudent || { ...student, ...nextStudent } : student)));
       cancelEditStudent();
+      return true;
     } catch (error) {
       reportDataError(error);
+      return false;
     }
+  };
+
+  const startStudentDetailsEdit = (student) => {
+    startEditStudent(student);
+    setIsStudentDetailsEditing(true);
+  };
+
+  const cancelStudentDetailsEdit = () => {
+    cancelEditStudent();
+    setIsStudentDetailsEditing(false);
+  };
+
+  const saveStudentDetailsEdit = async () => {
+    const wasSaved = await saveEditStudent();
+    if (wasSaved) setIsStudentDetailsEditing(false);
   };
 
   const startEditTeacher = (teacher) => {
@@ -2203,31 +2297,73 @@ export default function App() {
     setEditingTeacherFirstName(teacher.firstName || nameParts[0] || "");
     setEditingTeacherLastName(teacher.lastName || nameParts.slice(1).join(" "));
     setEditingTeacherEmail(teacher.email || "");
+    setEditingTeacherRole(teacher.role || "");
     setEditingTeacherPercent(teacher.percent);
   };
 
-  const saveEditTeacher = async () => {
+  const cancelEditTeacher = () => {
+    setEditingTeacherId(null);
+    setEditingTeacherFirstName("");
+    setEditingTeacherLastName("");
+    setEditingTeacherEmail("");
+    setEditingTeacherRole("");
+    setEditingTeacherPercent(80);
+  };
+
+  const saveEditTeacher = async (nextCv) => {
     const firstName = editingTeacherFirstName.trim();
     const lastName = editingTeacherLastName.trim();
-    if (!firstName && !lastName) return;
+    if (!firstName && !lastName) return false;
+    const currentTeacher = teachers.find((teacher) => sameId(teacher.id, editingTeacherId));
     const nextTeacher = {
       name: [firstName, lastName].filter(Boolean).join(" "),
       firstName,
       lastName,
       email: normalizeEmail(editingTeacherEmail),
+      role: editingTeacherRole.trim(),
+      cv: (nextCv ?? currentTeacher?.cv) || "",
       percent: Number(editingTeacherPercent),
     };
     try {
       const savedTeacher = await updateRow("teachers", editingTeacherId, teacherToRow(nextTeacher), normalizeTeacher);
       setTeachers((prev) => prev.map((teacher) => (teacher.id === editingTeacherId ? savedTeacher || { ...teacher, ...nextTeacher } : teacher)));
-      setEditingTeacherId(null);
-      setEditingTeacherFirstName("");
-      setEditingTeacherLastName("");
-      setEditingTeacherEmail("");
-      setEditingTeacherPercent(80);
+      cancelEditTeacher();
+      return true;
     } catch (error) {
       reportDataError(error);
+      return false;
     }
+  };
+
+  const openTeacherDetailsModal = (teacher) => {
+    cancelEditTeacher();
+    setDetailsTeacherId(teacher.id);
+    setTeacherDetailsCv(teacher.cv || "");
+    setIsTeacherDetailsEditing(false);
+  };
+
+  const closeTeacherDetailsModal = () => {
+    setDetailsTeacherId(null);
+    setTeacherDetailsCv("");
+    setIsTeacherDetailsEditing(false);
+    cancelEditTeacher();
+  };
+
+  const startTeacherDetailsEdit = (teacher) => {
+    startEditTeacher(teacher);
+    setTeacherDetailsCv(teacher.cv || "");
+    setIsTeacherDetailsEditing(true);
+  };
+
+  const cancelTeacherDetailsEdit = () => {
+    setTeacherDetailsCv(selectedDetailsTeacher?.cv || "");
+    cancelEditTeacher();
+    setIsTeacherDetailsEditing(false);
+  };
+
+  const saveTeacherDetailsEdit = async () => {
+    const wasSaved = await saveEditTeacher(teacherDetailsCv.trim());
+    if (wasSaved) setIsTeacherDetailsEditing(false);
   };
 
   const openAssignStudentsModal = () => {
@@ -2527,6 +2663,7 @@ export default function App() {
   );
 
   const filteredStudents = studentsWithEnrollment.filter((student) => {
+    if (isTeacherUser && !sameId(student.teacherId, currentTeacherId)) return false;
     const teacher = teachers.find((t) => sameId(t.id, student.teacherId));
     const q = studentSearch.trim().toLowerCase();
     if (!q) return true;
@@ -2743,12 +2880,14 @@ export default function App() {
     const q = teacherSearch.trim().toLowerCase();
     if (!q) return true;
     const teacherStudents = teacherStudentsForMonth(teacher.id);
+    const canSeePercent = canManageData || sameId(teacher.id, currentTeacherId);
     return (
       teacher.name.toLowerCase().includes(q) ||
       (teacher.firstName || "").toLowerCase().includes(q) ||
       (teacher.lastName || "").toLowerCase().includes(q) ||
       (teacher.email || "").toLowerCase().includes(q) ||
-      String(teacher.percent).includes(q) ||
+      (teacher.role || "").toLowerCase().includes(q) ||
+      (canSeePercent ? String(teacher.percent).includes(q) : false) ||
       String(teacherStudents.length).includes(q)
     );
   });
@@ -2758,6 +2897,7 @@ export default function App() {
     name: (teacher) => teacher.firstName || teacher.name,
     lastName: (teacher) => teacher.lastName,
     email: (teacher) => teacher.email,
+    role: (teacher) => teacher.role,
     studentsCount: (teacher) => teacherStudentsForMonth(teacher.id).length,
   });
 
@@ -3162,6 +3302,7 @@ export default function App() {
         teacher.firstName || teacher.name,
         teacher.lastName || "",
         teacher.email || "",
+        teacher.role || "",
         `${teacher.percent}%`,
         studentsWithEnrollment.filter((student) => sameId(student.teacherId, teacher.id)).length,
         formatExportCurrency(total),
@@ -3199,16 +3340,18 @@ export default function App() {
         ],
       },
       {
-        name: "Mesuesit",
+        name: "Stafi",
         rows: [
-          ["Nr", "Emri", "Mbiemri", "Email", "Perqindja", "Nxenes"],
+          ["Nr", "Emri", "Mbiemri", "Email", "Roli", "Perqindja", "Nxenes", "CV"],
           ...teachers.map((teacher, index) => [
             index + 1,
             teacher.firstName || teacher.name,
             teacher.lastName || "",
             teacher.email || "",
+            teacher.role || "",
             `${teacher.percent}%`,
             studentsWithEnrollment.filter((student) => sameId(student.teacherId, teacher.id)).length,
+            teacher.cv || "",
           ]),
         ],
       },
@@ -3255,7 +3398,7 @@ export default function App() {
       {
         name: "Paga",
         rows: [
-          ["Nr", "Emri", "Mbiemri", "Email", "%", "Nxenes", "Total", "Mesuesi", "Administrata", "Shkolla", "Mbetja"],
+          ["Nr", "Emri", "Mbiemri", "Email", "Roli", "%", "Nxenes", "Total", "Mesuesi", "Administrata", "Shkolla", "Mbetja"],
           ...allTimeTeacherRows,
         ],
       },
@@ -3264,7 +3407,7 @@ export default function App() {
         rows: [
           ["Kategoria", "Totali"],
           ["Te gjitha te hyrat", formatExportCurrency(allTimeIncomeOverview.totalIncome)],
-          ["Paga mesuesve", formatExportCurrency(allTimeTeacherRows.reduce((sum, row) => sum + parseMoney(row[7]), 0))],
+          ["Paga mesuesve", formatExportCurrency(allTimeTeacherRows.reduce((sum, row) => sum + parseMoney(row[8]), 0))],
           ["Administrata", formatExportCurrency(allTimeIncomeOverview.totalAdminShare)],
           ["Shkolla", formatExportCurrency(allTimeIncomeOverview.totalSchoolShare)],
           ["Shpenzime", formatExportCurrency(totalExpenses)],
@@ -3316,15 +3459,17 @@ export default function App() {
         ],
       },
       {
-        name: "Archive Mesues",
+        name: "Archive Stafi",
         rows: [
-          ["Nr", "Emri", "Mbiemri", "Email", "Perqindja"],
+          ["Nr", "Emri", "Mbiemri", "Email", "Roli", "Perqindja", "CV"],
           ...archive.teachers.map((teacher, index) => [
             index + 1,
             teacher.firstName || teacher.name,
             teacher.lastName || "",
             teacher.email || "",
+            teacher.role || "",
             `${teacher.percent}%`,
+            teacher.cv || "",
           ]),
         ],
       },
@@ -3382,6 +3527,7 @@ export default function App() {
           teacher.firstName || teacher.name,
           teacher.lastName || "",
           teacher.email || "",
+          teacher.role || "",
           `${teacher.percent}%`,
           studentsWithEnrollment.filter((student) => sameId(student.teacherId, teacher.id) && student.group === month).length,
           formatExportCurrency(total),
@@ -3392,7 +3538,7 @@ export default function App() {
         ];
       });
       const monthIncome = monthPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
-      const monthTeacherPay = monthTeacherRows.reduce((sum, row) => sum + parseMoney(row[7]), 0);
+      const monthTeacherPay = monthTeacherRows.reduce((sum, row) => sum + parseMoney(row[8]), 0);
       const monthAdminShare = monthPayments.reduce(
         (sum, payment) => sum + Number(payment.amount || 0) * (paymentAdminPercentValue(payment) / 100),
         0
@@ -3426,7 +3572,7 @@ export default function App() {
         {
           name: `Paga ${month}`,
           rows: [
-            ["Nr", "Emri", "Mbiemri", "Email", "%", "Nxenes", "Total", "Mesuesi", "Administrata", "Shkolla", "Mbetja"],
+            ["Nr", "Emri", "Mbiemri", "Email", "Roli", "%", "Nxenes", "Total", "Mesuesi", "Administrata", "Shkolla", "Mbetja"],
             ...monthTeacherRows,
           ],
         },
@@ -3473,7 +3619,9 @@ export default function App() {
       const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
       const archivedAt = new Date().toISOString();
       const teacherRows = [
+        ...getWorkbookRows(workbook, ["Stafi"]).map((row) => ({ row, archivedAt: null })),
         ...getWorkbookRows(workbook, ["Mesuesit", "Mësuesit"]).map((row) => ({ row, archivedAt: null })),
+        ...getWorkbookRows(workbook, ["Archive Stafi"]).map((row) => ({ row, archivedAt })),
         ...getWorkbookRows(workbook, ["Archive Mesues", "Archive Mësues"]).map((row) => ({ row, archivedAt })),
       ];
       const courseRows = [
@@ -3492,6 +3640,8 @@ export default function App() {
             firstName,
             lastName,
             email: normalizeEmail(getExcelValue(row, ["Email", "Emaili", "Emaili i mesuesit", "Emaili i mësuesit"])),
+            role: getExcelValue(row, ["Roli", "Roli i stafit"]),
+            cv: getExcelValue(row, ["CV", "Detaje"]),
             percent,
           };
           return { ...teacherToRow(teacher), archived_at: rowArchivedAt };
@@ -3667,6 +3817,7 @@ export default function App() {
 
   const selectedPaymentStudentDetails = studentsWithEnrollment.find((student) => sameId(student.id, selectedStudent));
   const selectedDetailsStudent = studentsWithEnrollment.find((student) => sameId(student.id, detailsStudentId));
+  const selectedDetailsTeacher = teachers.find((teacher) => sameId(teacher.id, detailsTeacherId));
   const selectedPaymentEnrollmentOptions = selectedStudent ? paymentEnrollmentOptionsForStudent(selectedStudent) : [];
   const selectedPaymentEnrollmentDetails =
     selectedPaymentEnrollmentOptions.find((enrollment) => sameId(enrollment.id, selectedPaymentEnrollmentId)) || null;
@@ -3687,7 +3838,7 @@ export default function App() {
 
   const navItems = useMemo(() => [
     { key: "students", label: "Nxënësit" },
-    { key: "teachers", label: "Mësuesit" },
+    { key: "teachers", label: "Stafi" },
     { key: "payments", label: "Pagesat" },
     { key: "paga", label: "Paga" },
     { key: "finance", label: "Financa" },
@@ -3945,18 +4096,10 @@ export default function App() {
                 <tbody>
                   {sortedStudents.map((student, index) => {
                     const teacher = teachers.find((t) => sameId(t.id, student.teacherId));
-                    const isSelected = selectedStudentView === student.id;
                     const isEditing = editingStudentId === student.id;
                     const hasPayment = hasStudentCurrentPayment(student);
                     return (
-                      <tr
-                        key={student.id}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          setSelectedStudentView((prev) => (prev === student.id ? null : student.id));
-                        }}
-                        className={`${rowHover} cursor-pointer ${isSelected ? selectedRow : ""}`}
-                      >
+                      <tr key={student.id} className={rowHover}>
                         <td className={tdClass}>{index + 1}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingStudentFirstName} onChange={(e) => setEditingStudentFirstName(e.target.value)} /> : (student.firstName || student.name)}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingStudentLastName} onChange={(e) => setEditingStudentLastName(e.target.value)} /> : (student.lastName || "-")}</td>
@@ -4006,15 +4149,15 @@ export default function App() {
                         <td className={tdClass}>
                           {isEditing ? (
                             <SearchableSelect
-                              className={input}
-                              value={editingStudentTeacherId}
-                              onChange={setEditingStudentTeacherId}
-                              placeholder="Zgjedh mësuesin"
-                              options={[
-                                { value: "", label: "Zgjedh mësuesin" },
-                                ...sortedTeachersAlpha.map((teacherOption) => ({
-                                  value: teacherOption.id,
-                                  label: teacherOption.name,
+                            className={input}
+                            value={editingStudentTeacherId}
+                            onChange={setEditingStudentTeacherId}
+                            placeholder="Zgjedh mësuesin"
+                            options={[
+                              { value: "", label: "Zgjedh mësuesin" },
+                              ...sortedTeachersAlpha.map((teacherOption) => ({
+                                value: teacherOption.id,
+                                label: teacherOption.name,
                                 })),
                               ]}
                             />
@@ -4029,13 +4172,10 @@ export default function App() {
                               </>
                             ) : canManageData ? (
                               <>
-                                <button onClick={(e) => { e.stopPropagation(); setDetailsStudentId(student.id); }} className={smallBtn} style={primaryBtnStyle}>{actionLabel("information", "Shfaq të dhënat")}</button>
-                                <button onClick={(e) => { e.stopPropagation(); startEditStudent(student); }} className={smallBtn} style={secondaryBtnStyle}>{actionLabel("edit", "Edit")}</button>
-                                <button onClick={(e) => { e.stopPropagation(); openEnrollmentModal(student); }} className={smallBtn} style={primaryBtnStyle}>{actionLabel("courses", "Kurset")}</button>
-                                <button onClick={(e) => { e.stopPropagation(); archiveStudent(student); }} className={smallBtn} style={warningBtnStyle}>{actionLabel("archive", "Archive")}</button>
+                                <button onClick={(e) => { e.stopPropagation(); openStudentDetailsModal(student); }} className={smallBtn} style={primaryBtnStyle}>{actionLabel("information", "Shfaq të dhënat")}</button>
                               </>
                             ) : (
-                              <button onClick={(e) => { e.stopPropagation(); setDetailsStudentId(student.id); }} className={smallBtn} style={primaryBtnStyle}>{actionLabel("information", "Shfaq të dhënat")}</button>
+                              <button onClick={(e) => { e.stopPropagation(); openStudentDetailsModal(student); }} className={smallBtn} style={primaryBtnStyle}>{actionLabel("information", "Shfaq të dhënat")}</button>
                             )}
                           </div>
                         </td>
@@ -4052,14 +4192,14 @@ export default function App() {
           <div className={`border rounded-lg lg:rounded-2xl shadow-sm ${card} p-3 sm:p-4`}>
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
               <div>
-                <h2 className="text-2xl font-bold" style={{ color: PRIMARY }}>Mësuesit</h2>
-                <p className="text-gray-500">Kliko një mësues për t’i parë nxënësit e tij poshtë.</p>
+                <h2 className="text-2xl font-bold" style={{ color: PRIMARY }}>Stafi</h2>
+                <p className="text-gray-500">Menaxho stafin, rolet dhe detajet e secilit anëtar.</p>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full lg:w-[44rem]">
                 {searchField({
                   value: teacherSearch,
                   onChange: (e) => setTeacherSearch(e.target.value),
-                  placeholder: "Kërko sipas emrit ose nxënësve",
+                  placeholder: "Kërko sipas emrit, rolit ose nxënësve",
                 })}
                 <input className={dateInput} type="month" value={teacherMonthFilter} onChange={(e) => setTeacherMonthFilter(e.target.value)} />
                 <button onClick={() => setTeacherMonthFilter("")} className={mainBtn} style={secondaryBtnStyle}>
@@ -4078,67 +4218,51 @@ export default function App() {
               >
                 {actionLabel("assign", "Cakto nxënësit")}
               </button>
-              <button onClick={() => setIsTeacherModalOpen(true)} className={mainBtn} style={secondaryBtnStyle}>{actionLabel("add", "Shto mësues")}</button>
+              <button onClick={() => setIsTeacherModalOpen(true)} className={mainBtn} style={secondaryBtnStyle}>{actionLabel("add", "Shto staf")}</button>
             </div>
             )}
 
             <div className={tableWrap}>
-              <table className="min-w-[62rem] w-full text-sm">
+              <table className="min-w-[74rem] w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-200">
                     <th className={thClass}>Nr</th>
                     <th className={thClass}>{sortButton("teachers", "name", "Emri")}</th>
                     <th className={thClass}>{sortButton("teachers", "lastName", "Mbiemri")}</th>
                     <th className={thClass}>{sortButton("teachers", "email", "Email")}</th>
+                    <th className={thClass}>{sortButton("teachers", "role", "Roli")}</th>
                     <th className={thClass}>Përqindja</th>
                     <th className={thClass}>{sortButton("teachers", "studentsCount", "Nxënës")}</th>
-                    <th className={thClass}>Veprime</th>
+                    <th className={thClass}>Detaje</th>
                   </tr>
                 </thead>
                 <tbody>
                   {sortedTeachers.map((teacher, index) => {
-                    const isSelected = selectedTeacherView === teacher.id;
                     const isEditing = editingTeacherId === teacher.id;
                     const countStudents = teacherStudentsForMonth(teacher.id).length;
+                    const canSeePercent = canManageData || sameId(teacher.id, currentTeacherId);
+                    const isSelected = sameId(selectedTeacherView, teacher.id);
                     return (
                       <tr
                         key={teacher.id}
                         onClick={(event) => {
+                          if (!canManageData) return;
                           event.stopPropagation();
-                          setSelectedTeacherView((prev) => (prev === teacher.id ? null : teacher.id));
+                          setSelectedTeacherView((prev) => (sameId(prev, teacher.id) ? null : teacher.id));
                         }}
-                        className={`${rowHover} cursor-pointer ${isSelected ? selectedRow : ""}`}
+                        className={`${rowHover} ${canManageData ? "cursor-pointer" : ""} ${canManageData && isSelected ? selectedRow : ""}`}
                       >
                         <td className={tdClass}>{index + 1}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingTeacherFirstName} onChange={(e) => setEditingTeacherFirstName(e.target.value)} /> : (teacher.firstName || teacher.name)}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingTeacherLastName} onChange={(e) => setEditingTeacherLastName(e.target.value)} /> : (teacher.lastName || "-")}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingTeacherEmail} onChange={(e) => setEditingTeacherEmail(e.target.value)} type="email" /> : (teacher.email || "-")}</td>
-                        <td className={tdClass}>{isEditing ? (
-                          <SearchableSelect
-                            className={input}
-                            value={editingTeacherPercent}
-                            onChange={setEditingTeacherPercent}
-                            placeholder="Përqindja"
-                            options={percentOptions.map((percent) => ({ value: percent, label: `${percent}%` }))}
-                          />
-                        ) : `${teacher.percent}%`}</td>
+                        <td className={tdClass}>{isEditing ? <input className={input} value={editingTeacherRole} onChange={(e) => setEditingTeacherRole(e.target.value)} placeholder="Roli" /> : (teacher.role || "-")}</td>
+                        <td className={tdClass}>{isEditing ? <input className={input} value={editingTeacherPercent} onChange={(e) => setEditingTeacherPercent(e.target.value)} type="number" min="0" step="0.01" placeholder="Përqindja" /> : canSeePercent ? `${teacher.percent}%` : "-"}</td>
                         <td className={tdClass}>{countStudents}</td>
                         <td className={tdClass}>
-                          <div className="flex flex-wrap gap-2">
-                            {isEditing ? (
-                              <>
-                                <button onClick={(e) => { e.stopPropagation(); saveEditTeacher(); }} className={smallBtn} style={primaryBtnStyle}>Save</button>
-                                <button onClick={(e) => { e.stopPropagation(); setEditingTeacherId(null); setEditingTeacherEmail(""); }} className={smallBtn} style={secondaryBtnStyle}>Cancel</button>
-                              </>
-                            ) : canManageData ? (
-                              <>
-                                <button onClick={(e) => { e.stopPropagation(); startEditTeacher(teacher); }} className={smallBtn} style={secondaryBtnStyle}>{actionLabel("edit", "Edit")}</button>
-                                <button onClick={(e) => { e.stopPropagation(); archiveTeacher(teacher); }} className={smallBtn} style={warningBtnStyle}>{actionLabel("archive", "Archive")}</button>
-                              </>
-                            ) : (
-                              <span className="text-gray-500">Vetëm lexim</span>
-                            )}
-                          </div>
+                          <button onClick={(e) => { e.stopPropagation(); openTeacherDetailsModal(teacher); }} className={smallBtn} style={primaryBtnStyle}>
+                            {actionLabel("information", "Shfaq detajet")}
+                          </button>
                         </td>
                       </tr>
                     );
@@ -4147,9 +4271,9 @@ export default function App() {
               </table>
             </div>
 
-            {selectedTeacherView && (
+            {canManageData && selectedTeacherView && (
               <div className="mt-6 border rounded-lg lg:rounded-2xl p-3 sm:p-4 bg-gray-50 border-gray-200">
-                <h3 className="text-lg font-bold mb-3" style={{ color: PRIMARY }}>Nxënësit e mësuesit të zgjedhur</h3>
+                <h3 className="text-lg font-bold mb-3" style={{ color: PRIMARY }}>Nxënësit e anëtarit të zgjedhur të stafit</h3>
                 <div className={tableWrap}>
                   <table className="min-w-[48rem] w-full text-sm">
                     <thead>
@@ -4177,7 +4301,7 @@ export default function App() {
                       ) : (
                         <tr>
                           <td className={tdClass} colSpan={6}>
-                            {teacherMonthFilter ? "Ky mësues nuk ka nxënës për këtë muaj." : "Ky mësues nuk ka nxënës."}
+                            {teacherMonthFilter ? "Ky anëtar i stafit nuk ka nxënës për këtë muaj." : "Ky anëtar i stafit nuk ka nxënës."}
                           </td>
                         </tr>
                       )}
@@ -4240,7 +4364,7 @@ export default function App() {
                     <th className={thClass}>€/orë</th>
                     <th className={thClass}>{sortButton("payments", "date", "Data")}</th>
                     <th className={thClass}>{sortButton("payments", "note", "Shenime")}</th>
-                    <th className={thClass}>Veprime</th>
+                    {canManageData && <th className={thClass}>Veprime</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -4292,6 +4416,7 @@ export default function App() {
                           <DateTextInput className={dateInput} value={editingPaymentDate} onChange={setEditingPaymentDate} />
                         ) : formatDateDisplay(payment.date)}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingPaymentNote} onChange={(e) => setEditingPaymentNote(e.target.value)} /> : (payment.note || "-")}</td>
+                        {canManageData && (
                         <td className={tdClass}>
                           <div className="flex flex-wrap gap-2">
                             {isEditing ? (
@@ -4299,16 +4424,15 @@ export default function App() {
                                 <button onClick={saveEditPayment} className={smallBtn} style={primaryBtnStyle}>Save</button>
                                 <button onClick={() => { setEditingPaymentId(null); setEditingPaymentEnrollmentId(""); setEditingPaymentDate(""); setEditingPaymentNote(""); setEditingPaymentHours(""); setEditingPaymentRate(""); setEditingPaymentType("fixed"); }} className={smallBtn} style={secondaryBtnStyle}>Cancel</button>
                               </>
-                            ) : canManageData ? (
+                            ) : (
                               <>
                                 <button onClick={() => startEditPayment(payment)} className={smallBtn} style={secondaryBtnStyle}>{actionLabel("edit", "Edit")}</button>
-                                <button onClick={() => archivePayment(payment)} className={smallBtn} style={warningBtnStyle}>{actionLabel("archive", "Archive")}</button>
+                                <button onClick={() => requestArchiveConfirmation("payment", payment)} className={smallBtn} style={warningBtnStyle}>{actionLabel("archive", "Archive")}</button>
                               </>
-                            ) : (
-                              <span className="text-gray-500">Vetëm lexim</span>
                             )}
                           </div>
                         </td>
+                        )}
                       </tr>
                     );
                   })}
@@ -4539,7 +4663,7 @@ export default function App() {
                             ) : (
                               <>
                                 <button onClick={() => startEditExpense(expense)} className={smallBtn} style={secondaryBtnStyle}>{actionLabel("edit", "Edit")}</button>
-                                <button onClick={() => archiveExpense(expense)} className={smallBtn} style={warningBtnStyle}>{actionLabel("archive", "Archive")}</button>
+                                <button onClick={() => requestArchiveConfirmation("expense", expense)} className={smallBtn} style={warningBtnStyle}>{actionLabel("archive", "Archive")}</button>
                               </>
                             )}
                           </div>
@@ -4583,7 +4707,7 @@ export default function App() {
                     <th className={thClass}>{sortButton("courses", "name", "Emri i kursit")}</th>
                     <th className={thClass}>{sortButton("courses", "pricingType", "Lloji")}</th>
                     <th className={thClass}>{sortButton("courses", "price", "Çmimi")}</th>
-                    <th className={thClass}>Veprime</th>
+                    {canManageData && <th className={thClass}>Veprime</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -4603,6 +4727,7 @@ export default function App() {
                           />
                         ) : pricingTypeLabel(course.pricingType)}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingCoursePrice} onChange={(e) => setEditingCoursePrice(e.target.value)} type="number" min="0" step="0.01" /> : formatCurrency(course.price)}</td>
+                        {canManageData && (
                         <td className={tdClass}>
                           <div className="flex flex-wrap gap-2">
                             {isEditing ? (
@@ -4610,16 +4735,15 @@ export default function App() {
                                 <button onClick={saveEditCourse} className={smallBtn} style={primaryBtnStyle}>Save</button>
                                 <button onClick={() => setEditingCourseId(null)} className={smallBtn} style={secondaryBtnStyle}>Cancel</button>
                               </>
-                            ) : canManageData ? (
+                            ) : (
                               <>
                                 <button onClick={() => startEditCourse(course)} className={smallBtn} style={secondaryBtnStyle}>{actionLabel("edit", "Edit")}</button>
-                                <button onClick={() => archiveCourse(course)} className={smallBtn} style={warningBtnStyle}>{actionLabel("archive", "Archive")}</button>
+                                <button onClick={() => requestArchiveConfirmation("course", course)} className={smallBtn} style={warningBtnStyle}>{actionLabel("archive", "Archive")}</button>
                               </>
-                            ) : (
-                              <span className="text-gray-500">Vetëm lexim</span>
                             )}
                           </div>
                         </td>
+                        )}
                       </tr>
                     );
                   })}
@@ -4858,7 +4982,7 @@ export default function App() {
         )}
 
         {selectedDetailsStudent && (
-          <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center overflow-y-auto bg-black/40 p-3 sm:p-4" onClick={() => setDetailsStudentId(null)}>
+          <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center overflow-y-auto bg-black/40 p-3 sm:p-4" onClick={closeStudentDetailsModal}>
             <div className="my-4 w-full max-w-2xl rounded-lg bg-white p-4 sm:p-6 shadow-xl space-y-4" onClick={(e) => e.stopPropagation()}>
               <div>
                 <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>Të dhënat e nxënësit</h3>
@@ -4866,22 +4990,130 @@ export default function App() {
               </div>
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Emri</span><span className="font-medium">{selectedDetailsStudent.firstName || "-"}</span></div>
-                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Mbiemri</span><span className="font-medium">{selectedDetailsStudent.lastName || "-"}</span></div>
-                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Mosha</span><span className="font-medium">{selectedDetailsStudent.age || "-"}</span></div>
-                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Qyteti</span><span className="font-medium">{selectedDetailsStudent.city || "-"}</span></div>
-                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Telefoni</span><span className="font-medium">{selectedDetailsStudent.phone || "-"}</span></div>
-                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Emaili</span><span className="font-medium">{selectedDetailsStudent.email || "-"}</span></div>
-                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Kursi</span><span className="font-medium">{selectedDetailsStudent.course || "-"}</span></div>
-                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Muaji</span><span className="font-medium">{formatMonthYear(selectedDetailsStudent.group)}</span></div>
-                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Grupi</span><span className="font-medium">{selectedDetailsStudent.studentGroup || "-"}</span></div>
-                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Mësuesi</span><span className="font-medium">{selectedDetailsStudent.teacherName || "Pa mësues"}</span></div>
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Emri</span>{isStudentDetailsEditing ? <input className={`${input} mt-2`} value={editingStudentFirstName} onChange={(e) => setEditingStudentFirstName(e.target.value)} /> : <span className="font-medium">{selectedDetailsStudent.firstName || "-"}</span>}</div>
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Mbiemri</span>{isStudentDetailsEditing ? <input className={`${input} mt-2`} value={editingStudentLastName} onChange={(e) => setEditingStudentLastName(e.target.value)} /> : <span className="font-medium">{selectedDetailsStudent.lastName || "-"}</span>}</div>
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Mosha</span>{isStudentDetailsEditing ? <input className={`${input} mt-2`} value={editingStudentAge} onChange={(e) => setEditingStudentAge(e.target.value)} type="number" min="0" /> : <span className="font-medium">{selectedDetailsStudent.age || "-"}</span>}</div>
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Qyteti</span>{isStudentDetailsEditing ? <input className={`${input} mt-2`} value={editingStudentCity} onChange={(e) => setEditingStudentCity(e.target.value)} /> : <span className="font-medium">{selectedDetailsStudent.city || "-"}</span>}</div>
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Telefoni</span>{isStudentDetailsEditing ? <input className={`${input} mt-2`} value={editingStudentPhone} onChange={(e) => setEditingStudentPhone(e.target.value)} /> : <span className="font-medium">{selectedDetailsStudent.phone || "-"}</span>}</div>
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Emaili</span>{isStudentDetailsEditing ? <input className={`${input} mt-2`} value={editingStudentEmail} onChange={(e) => setEditingStudentEmail(e.target.value)} type="email" /> : <span className="font-medium">{selectedDetailsStudent.email || "-"}</span>}</div>
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Kursi</span>{isStudentDetailsEditing ? (
+                  <div className="mt-2">
+                    <SearchableSelect
+                      className={input}
+                      value={editingStudentCourse}
+                      onChange={setEditingStudentCourse}
+                      placeholder="Zgjedh kursin"
+                      options={[
+                        { value: "", label: "Zgjedh kursin" },
+                        ...(editingStudentCourse && !courses.some((course) => course.name === editingStudentCourse)
+                          ? [{ value: editingStudentCourse, label: editingStudentCourse }]
+                          : []),
+                        ...sortedCoursesAlpha.map((course) => ({ value: course.name, label: course.name })),
+                      ]}
+                    />
+                  </div>
+                ) : <span className="font-medium">{selectedDetailsStudent.course || "-"}</span>}</div>
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Muaji</span>{isStudentDetailsEditing ? <input className={`${dateInput} mt-2`} type="month" value={editingStudentGroup} onChange={(e) => setEditingStudentGroup(e.target.value)} /> : <span className="font-medium">{formatMonthYear(selectedDetailsStudent.group)}</span>}</div>
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Grupi</span>{isStudentDetailsEditing ? <input className={`${input} mt-2`} value={editingStudentStudentGroup} onChange={(e) => setEditingStudentStudentGroup(e.target.value)} /> : <span className="font-medium">{selectedDetailsStudent.studentGroup || "-"}</span>}</div>
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Mësuesi</span>{isStudentDetailsEditing ? (
+                  <div className="mt-2">
+                    <SearchableSelect
+                      className={input}
+                      value={editingStudentTeacherId}
+                      onChange={setEditingStudentTeacherId}
+                      placeholder="Zgjedh mësuesin"
+                      options={[
+                        { value: "", label: "Zgjedh mësuesin" },
+                        ...sortedTeachersAlpha.map((teacherOption) => ({
+                          value: teacherOption.id,
+                          label: teacherOption.name,
+                        })),
+                      ]}
+                    />
+                  </div>
+                ) : <span className="font-medium">{selectedDetailsStudent.teacherName || "Pa mësues"}</span>}</div>
                 <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Statusi</span><span className="font-medium">{enrollmentStatusLabel(selectedDetailsStudent.enrollmentStatus)}</span></div>
                 <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Pagesa</span><span className="font-medium">{isTeacherUser && !sameId(selectedDetailsStudent.teacherId, currentTeacherId) ? "-" : hasStudentCurrentPayment(selectedDetailsStudent) ? "E paguar" : "Pa paguar"}</span></div>
               </div>
 
               <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-                <button type="button" onClick={() => setDetailsStudentId(null)} className={smallBtn} style={secondaryBtnStyle}>Close</button>
+                <button type="button" onClick={closeStudentDetailsModal} className={smallBtn} style={secondaryBtnStyle}>Close</button>
+                {canManageData && isStudentDetailsEditing ? (
+                  <>
+                    <button type="button" onClick={cancelStudentDetailsEdit} className={smallBtn} style={secondaryBtnStyle}>Cancel</button>
+                    <button type="button" onClick={saveStudentDetailsEdit} className={smallBtn} style={primaryBtnStyle}>Save</button>
+                  </>
+                ) : canManageData ? (
+                  <>
+                    <button type="button" onClick={() => openEnrollmentModal(selectedDetailsStudent)} className={smallBtn} style={primaryBtnStyle}>{actionLabel("courses", "Kurset")}</button>
+                    <button type="button" onClick={() => startStudentDetailsEdit(selectedDetailsStudent)} className={smallBtn} style={secondaryBtnStyle}>{actionLabel("edit", "Edit")}</button>
+                    <button type="button" onClick={() => requestArchiveConfirmation("student", selectedDetailsStudent)} className={smallBtn} style={warningBtnStyle}>{actionLabel("archive", "Archive")}</button>
+                  </>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {selectedDetailsTeacher && (
+          <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center overflow-y-auto bg-black/40 p-3 sm:p-4" onClick={closeTeacherDetailsModal}>
+            <div className="my-4 w-full max-w-2xl rounded-lg bg-white p-4 sm:p-6 shadow-xl space-y-4" onClick={(e) => e.stopPropagation()}>
+              <div>
+                <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>Detajet e stafit</h3>
+                <p className="text-sm text-gray-500">{selectedDetailsTeacher.name}</p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Emri</span>{isTeacherDetailsEditing ? <input className={`${input} mt-2`} value={editingTeacherFirstName} onChange={(e) => setEditingTeacherFirstName(e.target.value)} /> : <span className="font-medium">{selectedDetailsTeacher.firstName || "-"}</span>}</div>
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Mbiemri</span>{isTeacherDetailsEditing ? <input className={`${input} mt-2`} value={editingTeacherLastName} onChange={(e) => setEditingTeacherLastName(e.target.value)} /> : <span className="font-medium">{selectedDetailsTeacher.lastName || "-"}</span>}</div>
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Emaili</span>{isTeacherDetailsEditing ? <input className={`${input} mt-2`} value={editingTeacherEmail} onChange={(e) => setEditingTeacherEmail(e.target.value)} type="email" /> : <span className="font-medium">{selectedDetailsTeacher.email || "-"}</span>}</div>
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Roli</span>{isTeacherDetailsEditing ? <input className={`${input} mt-2`} value={editingTeacherRole} onChange={(e) => setEditingTeacherRole(e.target.value)} /> : <span className="font-medium">{selectedDetailsTeacher.role || "-"}</span>}</div>
+                <div className="rounded-lg border border-gray-200 px-3 py-2 sm:col-span-2"><span className="block text-xs text-gray-500">Përqindja</span>{isTeacherDetailsEditing ? <input className={`${input} mt-2`} value={editingTeacherPercent} onChange={(e) => setEditingTeacherPercent(e.target.value)} type="number" min="0" step="0.01" /> : <span className="font-medium">{sameId(selectedDetailsTeacher.id, currentTeacherId) || canManageData ? `${selectedDetailsTeacher.percent}%` : "-"}</span>}</div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-gray-700">CV</label>
+                <textarea
+                  className={`${input} min-h-40`}
+                  value={teacherDetailsCv}
+                  onChange={(e) => setTeacherDetailsCv(e.target.value)}
+                  placeholder="Shkruaj CV-në ose detajet e anëtarit të stafit"
+                  disabled={!isTeacherDetailsEditing}
+                />
+              </div>
+
+              <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+                <button type="button" onClick={closeTeacherDetailsModal} className={smallBtn} style={secondaryBtnStyle}>Close</button>
+                {canManageData && isTeacherDetailsEditing ? (
+                  <>
+                    <button type="button" onClick={cancelTeacherDetailsEdit} className={smallBtn} style={secondaryBtnStyle}>Cancel</button>
+                    <button type="button" onClick={saveTeacherDetailsEdit} className={smallBtn} style={primaryBtnStyle}>Save</button>
+                  </>
+                ) : canManageData ? (
+                  <>
+                    <button type="button" onClick={() => startTeacherDetailsEdit(selectedDetailsTeacher)} className={smallBtn} style={secondaryBtnStyle}>{actionLabel("edit", "Edit")}</button>
+                    <button type="button" onClick={() => requestArchiveConfirmation("teacher", selectedDetailsTeacher)} className={smallBtn} style={warningBtnStyle}>{actionLabel("archive", "Archive")}</button>
+                  </>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {archiveConfirmState && (
+          <div className="fixed inset-0 z-[60] flex items-start sm:items-center justify-center overflow-y-auto bg-black/40 p-3 sm:p-4" onClick={() => setArchiveConfirmState(null)}>
+            <div className="my-4 w-full max-w-md rounded-lg bg-white p-4 sm:p-6 shadow-xl space-y-4" onClick={(e) => e.stopPropagation()}>
+              <div>
+                <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>Konfirmo arkivimin</h3>
+                <p className="text-sm text-gray-600">
+                  A dëshironi ta arkivoni {archiveEntityLabel(archiveConfirmState.type)}{" "}
+                  <span className="font-semibold">{archiveEntityName(archiveConfirmState.type, archiveConfirmState.item)}</span>?
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+                <button type="button" onClick={() => setArchiveConfirmState(null)} className={smallBtn} style={secondaryBtnStyle}>Jo</button>
+                <button type="button" onClick={confirmArchiveAction} className={smallBtn} style={warningBtnStyle}>Po</button>
               </div>
             </div>
           </div>
@@ -5272,23 +5504,16 @@ export default function App() {
               }}
             >
               <div>
-                <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>Shto m&euml;sues</h3>
-                <p className="text-sm text-gray-500">Plot&euml;so t&euml; dh&euml;nat e m&euml;suesit.</p>
+                <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>Shto staf</h3>
+                <p className="text-sm text-gray-500">Plot&euml;so t&euml; dh&euml;nat e an&euml;tarit t&euml; stafit.</p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <input className={input} value={teacherForm.firstName} onChange={(e) => setTeacherForm((prev) => ({ ...prev, firstName: e.target.value }))} placeholder="Emri" required />
                 <input className={input} value={teacherForm.lastName} onChange={(e) => setTeacherForm((prev) => ({ ...prev, lastName: e.target.value }))} placeholder="Mbiemri" required />
-                <input className={`${input} md:col-span-2`} value={teacherForm.email} onChange={(e) => setTeacherForm((prev) => ({ ...prev, email: e.target.value }))} placeholder="Emaili i mësuesit" type="email" />
-                <div className="md:col-span-2">
-                  <SearchableSelect
-                    className={input}
-                    value={teacherForm.percent}
-                    onChange={(nextValue) => setTeacherForm((prev) => ({ ...prev, percent: nextValue }))}
-                    placeholder="Përqindja"
-                    options={percentOptions.map((percent) => ({ value: percent, label: `${percent}%` }))}
-                  />
-                </div>
+                <input className={`${input} md:col-span-2`} value={teacherForm.email} onChange={(e) => setTeacherForm((prev) => ({ ...prev, email: e.target.value }))} placeholder="Emaili i anëtarit" type="email" />
+                <input className={`${input} md:col-span-2`} value={teacherForm.role} onChange={(e) => setTeacherForm((prev) => ({ ...prev, role: e.target.value }))} placeholder="Roli" />
+                <input className={`${input} md:col-span-2`} value={teacherForm.percent} onChange={(e) => setTeacherForm((prev) => ({ ...prev, percent: e.target.value }))} placeholder="Përqindja" type="number" min="0" step="0.01" />
               </div>
 
               <div className="flex flex-col sm:flex-row sm:justify-end gap-2">

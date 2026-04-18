@@ -3,6 +3,10 @@
 
 create extension if not exists pgcrypto;
 
+alter table public.teachers
+add column if not exists role text,
+add column if not exists cv text;
+
 create table if not exists public.enrollments (
   id text primary key default gen_random_uuid()::text,
   student_id text not null,
