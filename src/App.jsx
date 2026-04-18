@@ -21,7 +21,7 @@ import sidebarIcon from "./assets/sidebar.png";
 import { isSupabaseConfigured, supabase } from "./supabase";
 
 function formatCurrency(value) {
-  return `â‚¬${Number(value || 0).toFixed(2)}`;
+  return `€${Number(value || 0).toFixed(2)}`;
 }
 
 function formatExportCurrency(value) {
@@ -235,15 +235,15 @@ const emptyCourseForm = {
 };
 
 const pricingTypeOptions = [
-  { value: "hourly", label: "Me orÃ«" },
+  { value: "hourly", label: "Me orë" },
   { value: "fixed", label: "Mujore" },
 ];
 
 const enrollmentStatusOptions = [
   { value: "active", label: "Aktiv" },
   { value: "inactive", label: "Joaktiv" },
-  { value: "paused", label: "PauzÃ«" },
-  { value: "completed", label: "PÃ«rfunduar" },
+  { value: "paused", label: "Pauzë" },
+  { value: "completed", label: "Përfunduar" },
 ];
 
 const SCHOOL_SHARE_CAP_START_MONTH = "2026-04";
@@ -313,7 +313,7 @@ function SearchableSelect({
   onChange,
   options,
   placeholder = "Zgjedh",
-  searchPlaceholder = "KÃ«rko...",
+  searchPlaceholder = "Kërko...",
   className = "",
   disabled = false,
   onOpen,
@@ -370,7 +370,7 @@ function SearchableSelect({
         <span className={`truncate ${selectedOption ? "" : "text-gray-500"}`}>
           {selectedOption?.label || placeholder}
         </span>
-        <span className="shrink-0 text-xs text-gray-500">â–¼</span>
+        <span className="shrink-0 text-xs text-gray-500">▼</span>
       </button>
 
       {isOpen && (
@@ -521,7 +521,7 @@ export default function App() {
   const [editingCoursePrice, setEditingCoursePrice] = useState("");
   const [editingCoursePricingType, setEditingCoursePricingType] = useState("fixed");
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
-  const [paymentModalTitle, setPaymentModalTitle] = useState("Shto pagesÃ«");
+  const [paymentModalTitle, setPaymentModalTitle] = useState("Shto pagesë");
   const [selectedStudent, setSelectedStudent] = useState("");
   const [selectedPaymentEnrollmentId, setSelectedPaymentEnrollmentId] = useState("");
   const [paymentAmount, setPaymentAmount] = useState("");
@@ -535,6 +535,7 @@ export default function App() {
 
   const [studentSearch, setStudentSearch] = useState("");
   const [studentGroupFilter, setStudentGroupFilter] = useState(currentMonthInput());
+  const [studentStatusFilter, setStudentStatusFilter] = useState("active");
   const [teacherSearch, setTeacherSearch] = useState("");
   const [teacherMonthFilter, setTeacherMonthFilter] = useState(currentMonthInput());
   const [courseSearch, setCourseSearch] = useState("");
@@ -611,6 +612,13 @@ export default function App() {
   });
 
   const percentOptions = [60, 65, 70, 75, 80];
+  const studentStatusOptions = [
+    { value: "active", label: "Aktiv" },
+    { value: "inactive", label: "Joaktiv" },
+    { value: "paused", label: "Pauzë" },
+    { value: "completed", label: "Përfunduar" },
+    { value: "", label: "Të gjithë" },
+  ];
 
   const shell = "text-gray-900";
   const sidebar = "border-gray-200";
@@ -1502,13 +1510,13 @@ export default function App() {
   const sortButton = (table, key, label) => (
     <button type="button" className={sortBtnClass} onClick={() => changeSort(table, key)}>
       <span>{label}</span>
-      <span>{sortConfig[table]?.key === key ? (sortConfig[table].direction === "asc" ? "â–²" : "â–¼") : ""}</span>
+      <span>{sortConfig[table]?.key === key ? (sortConfig[table].direction === "asc" ? "▲" : "▼") : ""}</span>
     </button>
   );
 
   const isHourlyCourse = (course) => (course?.pricingType || "fixed") === "hourly";
   const hourlyPaymentAmount = (hours, rate) => Number(hours || 0) * parseMoney(rate);
-  const pricingTypeLabel = (type) => ((type || "fixed") === "hourly" ? "Me orÃ«" : "Mujore");
+  const pricingTypeLabel = (type) => ((type || "fixed") === "hourly" ? "Me orë" : "Mujore");
 
   useEffect(() => {
     setPayments((prev) => {
@@ -1523,7 +1531,7 @@ export default function App() {
           ...payment,
           studentName: payment.studentName || student?.name || "Pa student",
           teacherId: payment.teacherId != null ? payment.teacherId : enrollment?.teacherId != null ? enrollment.teacherId : student?.teacherId ?? null,
-          teacherName: payment.teacherName || teacher?.name || "Pa mÃ«sues",
+          teacherName: payment.teacherName || teacher?.name || "Pa mësues",
         };
         if (
           patched.studentName !== payment.studentName ||
@@ -1549,7 +1557,7 @@ export default function App() {
           ...payment,
           studentName: payment.studentName || student?.name || "Pa student",
           teacherId: payment.teacherId != null ? payment.teacherId : enrollment?.teacherId != null ? enrollment.teacherId : student?.teacherId ?? null,
-          teacherName: payment.teacherName || teacher?.name || "Pa mÃ«sues",
+          teacherName: payment.teacherName || teacher?.name || "Pa mësues",
         };
         if (
           patched.studentName !== payment.studentName ||
@@ -1612,7 +1620,7 @@ export default function App() {
           const finalFirstName = firstName || fallbackParts[0] || "";
           const finalLastName = lastName || fallbackParts.slice(1).join(" ");
           const name = [finalFirstName, finalLastName].filter(Boolean).join(" ");
-          const teacherName = getExcelValue(row, ["Mesuesi", "MÃ«suesi", "Teacher"]);
+          const teacherName = getExcelValue(row, ["Mesuesi", "Mësuesi", "Teacher"]);
           const teacher = teachers.find((item) => item.name.toLowerCase() === teacherName.toLowerCase());
 
           if (!name) return null;
@@ -1731,7 +1739,7 @@ export default function App() {
   };
 
   const openPaymentModal = () => {
-    setPaymentModalTitle("Shto pagesÃ«");
+    setPaymentModalTitle("Shto pagesë");
     setSelectedStudent("");
     setSelectedPaymentEnrollmentId("");
     setPaymentAmount("");
@@ -1774,7 +1782,7 @@ export default function App() {
 
   const openPaymentModalForStudent = (student) => {
     openPaymentModal();
-    setPaymentModalTitle(`Pagesa - ${student.name || "NxÃ«nÃ«si"}`);
+    setPaymentModalTitle(`Pagesa - ${student.name || "Nxënësi"}`);
     setPaymentDefaultsForStudent(student.id);
   };
 
@@ -1821,7 +1829,7 @@ export default function App() {
         groupName: enrollment?.studentGroup || student?.studentGroup || "",
         paymentMonth: paymentDate ? monthFromDate(paymentDate) : currentPaymentMonth,
         teacherId: enrollment?.teacherId ?? student?.teacherId ?? null,
-        teacherName: teacher?.name || "Pa mÃ«sues",
+        teacherName: teacher?.name || "Pa mësues",
         amount: parseMoney(paymentAmount),
         teacherPercent: Number(paymentTeacherPercent),
         adminPercent: Number(paymentAdminPercent),
@@ -2042,31 +2050,9 @@ export default function App() {
   };
 
   const closeOtherActiveEnrollments = async (studentId, exceptEnrollmentId = null, endMonth = currentMonthInput()) => {
-    const rowsToClose = enrollments.filter(
-      (enrollment) =>
-        sameId(enrollment.studentId, studentId) &&
-        enrollment.status === "active" &&
-        !sameId(enrollment.id, exceptEnrollmentId)
-    );
-    if (!rowsToClose.length) return;
-
-    const savedRows = await Promise.all(
-      rowsToClose.map((enrollment) =>
-        updateRow(
-          "enrollments",
-          enrollment.id,
-          enrollmentToRow({
-            ...enrollment,
-            status: "completed",
-            endMonth: enrollment.endMonth || endMonth,
-          }),
-          normalizeEnrollment
-        )
-      )
-    );
-    setEnrollments((prev) =>
-      savedRows.filter(Boolean).reduce((rows, enrollment) => upsertById(rows, enrollment), prev)
-    );
+    void studentId;
+    void exceptEnrollmentId;
+    void endMonth;
   };
 
   const saveEnrollmentForm = async () => {
@@ -2111,6 +2097,44 @@ export default function App() {
       const savedEnrollment = await saveEnrollment(nextEnrollment, enrollment.id);
       if (savedEnrollment.status === "active") {
         await updateStudentMirrorFromEnrollment(enrollment.studentId, savedEnrollment);
+      }
+    } catch (error) {
+      reportDataError(error);
+    }
+  };
+
+  const deleteEnrollment = async (enrollment) => {
+    if (!window.confirm("A je i sigurt qe don me e fshi kete kurs te ky nxenes?")) return;
+
+    const remainingEnrollment =
+      studentEnrollmentRows(enrollment.studentId).filter((item) => !sameId(item.id, enrollment.id))[0] || null;
+
+    try {
+      await deleteRow("enrollments", enrollment.id);
+      setEnrollments((prev) => prev.filter((item) => !sameId(item.id, enrollment.id)));
+
+      if (remainingEnrollment) {
+        await updateStudentMirrorFromEnrollment(enrollment.studentId, remainingEnrollment);
+      } else {
+        const student = students.find((item) => sameId(item.id, enrollment.studentId));
+        if (student) {
+          const clearedStudent = {
+            ...student,
+            course: "",
+            group: "",
+            studentGroup: "",
+            teacherId: null,
+          };
+          const savedStudent = await updateRow("students", enrollment.studentId, studentToRow(clearedStudent), normalizeStudent);
+          setStudents((prev) =>
+            prev.map((item) => (sameId(item.id, enrollment.studentId) ? savedStudent || clearedStudent : item))
+          );
+        }
+      }
+
+      if (sameId(editingEnrollmentId, enrollment.id)) {
+        setEditingEnrollmentId(null);
+        setEnrollmentForm({ ...emptyEnrollmentForm, group: currentMonthInput() });
       }
     } catch (error) {
       reportDataError(error);
@@ -2328,7 +2352,7 @@ export default function App() {
         groupName: enrollment?.studentGroup || existingPayment?.groupName || "",
         paymentMonth: monthFromDate(editingPaymentDate),
         teacherId: enrollment?.teacherId ?? student?.teacherId ?? null,
-        teacherName: teacher?.name || existingPayment?.teacherName || "Pa mÃ«sues",
+        teacherName: teacher?.name || existingPayment?.teacherName || "Pa mësues",
         teacherPercent: existingPayment?.teacherPercent ?? 80,
         adminPercent: existingPayment?.adminPercent ?? 15,
         schoolPercent: existingPayment?.schoolPercent ?? 5,
@@ -2521,9 +2545,11 @@ export default function App() {
       teacher?.name,
     ].some((value) => String(value || "").toLowerCase().includes(q));
   });
-  const filteredStudentsByGroup = filteredStudents.filter((student) =>
-    studentGroupFilter ? student.group === studentGroupFilter : true
-  );
+  const filteredStudentsByGroup = filteredStudents.filter((student) => {
+    const matchesGroup = studentGroupFilter ? student.group === studentGroupFilter : true;
+    const matchesStatus = studentStatusFilter ? student.enrollmentStatus === studentStatusFilter : true;
+    return matchesGroup && matchesStatus;
+  });
 
   const selectedTeacherStudents = studentsWithEnrollment.filter((student) => {
     const matchesTeacher = sameId(student.teacherId, selectedTeacherView);
@@ -2553,7 +2579,7 @@ export default function App() {
     return {
       ...payment,
       studentName: payment.studentName || student?.name || "Pa student",
-      teacherName: payment.teacherName || teacher?.name || "Pa mÃ«sues",
+      teacherName: payment.teacherName || teacher?.name || "Pa mësues",
       courseName: payment.courseName || enrollment?.course || student?.course || "",
       groupName: payment.groupName || enrollment?.studentGroup || student?.studentGroup || "",
       month: monthFromDate(payment.date),
@@ -2976,12 +3002,12 @@ export default function App() {
     ...(financeExportTeacherName
       ? [
           [financeExportTeacherName, "", ""],
-          ["NxÃ«nÃ«si", "Pagesa", "Shenime"],
+          ["Nxënësi", "Pagesa", "Shenime"],
           ...financePaymentRows.map((row) => [row.studentName, formatExportCurrency(row.teacherPayment), note]),
           ["", formatExportCurrency(financeExportTotal), ""],
         ]
       : [
-          ["MÃ«suesi", "NxÃ«nÃ«si", "Pagesa", "Shenime"],
+          ["Mësuesi", "Nxënësi", "Pagesa", "Shenime"],
           ...financePaymentRows.map((row) => [row.teacherName, row.studentName, formatExportCurrency(row.teacherPayment), note]),
           ["", "", formatExportCurrency(financeExportTotal), ""],
         ]),
@@ -3038,7 +3064,7 @@ export default function App() {
         headStyles: { fontStyle: "bold" },
         head: [
           [{ content: financeExportTeacherName, colSpan: 3, styles: { fontStyle: "bold", halign: "center" } }],
-          ["NxÃ«nÃ«si", "Pagesa", "Shenime"],
+          ["Nxënësi", "Pagesa", "Shenime"],
         ],
         body: [
           ...financePaymentRows.map((row) => [row.studentName, formatExportCurrency(row.teacherPayment), note]),
@@ -3052,7 +3078,7 @@ export default function App() {
         tableWidth: "auto",
         styles: { lineColor: [0, 0, 0], lineWidth: 0.1 },
         headStyles: { fontStyle: "bold" },
-        head: [["MÃ«suesi", "NxÃ«nÃ«si", "Pagesa", "Shenime"]],
+        head: [["Mësuesi", "Nxënësi", "Pagesa", "Shenime"]],
         body: [
           ...financePaymentRows.map((row) => [row.teacherName, row.studentName, formatExportCurrency(row.teacherPayment), note]),
           ["", "", formatExportCurrency(financeExportTotal), ""],
@@ -3210,7 +3236,7 @@ export default function App() {
       {
         name: "Pagesat",
         rows: [
-          ["Nr", "Nxenesi", "Mesuesi", "Shuma", "OrÃ«t", "Ã‡mimi/orÃ«", "Data", "Mesuesi %", "Administrata %", "Shkolla %", "Shenime"],
+          ["Nr", "Nxenesi", "Mesuesi", "Shuma", "Orët", "Çmimi/orë", "Data", "Mesuesi %", "Administrata %", "Shkolla %", "Shenime"],
           ...payments.map((payment, index) => [
             index + 1,
             payment.studentName || studentById(payment.studentId)?.name || "Pa student",
@@ -3305,7 +3331,7 @@ export default function App() {
       {
         name: "Archive Pagesa",
         rows: [
-          ["Nr", "Nxenesi", "Mesuesi", "Shuma", "OrÃ«t", "Ã‡mimi/orÃ«", "Data", "Shenime"],
+          ["Nr", "Nxenesi", "Mesuesi", "Shuma", "Orët", "Çmimi/orë", "Data", "Shenime"],
           ...archive.payments.map((payment, index) => [
             index + 1,
             payment.studentName || "Pa student",
@@ -3447,8 +3473,8 @@ export default function App() {
       const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
       const archivedAt = new Date().toISOString();
       const teacherRows = [
-        ...getWorkbookRows(workbook, ["Mesuesit", "MÃ«suesit"]).map((row) => ({ row, archivedAt: null })),
-        ...getWorkbookRows(workbook, ["Archive Mesues", "Archive MÃ«sues"]).map((row) => ({ row, archivedAt })),
+        ...getWorkbookRows(workbook, ["Mesuesit", "Mësuesit"]).map((row) => ({ row, archivedAt: null })),
+        ...getWorkbookRows(workbook, ["Archive Mesues", "Archive Mësues"]).map((row) => ({ row, archivedAt })),
       ];
       const courseRows = [
         ...getWorkbookRows(workbook, ["Kurset"]).map((row) => ({ row, archivedAt: null })),
@@ -3459,13 +3485,13 @@ export default function App() {
         .map(({ row, archivedAt: rowArchivedAt }) => {
           const firstName = getExcelValue(row, ["Emri"]);
           const lastName = getExcelValue(row, ["Mbiemri"]);
-          const percent = parseMoney(getExcelValue(row, ["Perqindja", "PÃ«rqindja", "%"])) || 80;
+          const percent = parseMoney(getExcelValue(row, ["Perqindja", "Përqindja", "%"])) || 80;
           if (!firstName && !lastName) return null;
           const teacher = {
             name: [firstName, lastName].filter(Boolean).join(" "),
             firstName,
             lastName,
-            email: normalizeEmail(getExcelValue(row, ["Email", "Emaili", "Emaili i mesuesit", "Emaili i mÃ«suesit"])),
+            email: normalizeEmail(getExcelValue(row, ["Email", "Emaili", "Emaili i mesuesit", "Emaili i mësuesit"])),
             percent,
           };
           return { ...teacherToRow(teacher), archived_at: rowArchivedAt };
@@ -3476,7 +3502,7 @@ export default function App() {
         .map(({ row, archivedAt: rowArchivedAt }) => {
           const name = getExcelValue(row, ["Emri i kursit", "Kursi", "Emri"]);
           const typeLabel = normalizeExcelKey(getExcelValue(row, ["Lloji", "Tipi"]));
-          const price = parseMoney(getExcelValue(row, ["Cmimi", "Ã‡mimi", "Price"]));
+          const price = parseMoney(getExcelValue(row, ["Cmimi", "Çmimi", "Price"]));
           if (!name) return null;
           return {
             ...courseToRow({
@@ -3502,20 +3528,20 @@ export default function App() {
         teacherLookup.find((teacher) => normalizeExcelKey(teacher.name) === normalizeExcelKey(name));
 
       const studentRows = [
-        ...getWorkbookRows(workbook, ["Nxenesit", "NxÃ«nÃ«sit"]).map((row) => ({ row, archivedAt: null })),
-        ...getWorkbookRows(workbook, ["Archive Nxenes", "Archive NxÃ«nÃ«s"]).map((row) => ({ row, archivedAt })),
+        ...getWorkbookRows(workbook, ["Nxenesit", "Nxënësit"]).map((row) => ({ row, archivedAt: null })),
+        ...getWorkbookRows(workbook, ["Archive Nxenes", "Archive Nxënës"]).map((row) => ({ row, archivedAt })),
       ];
       const studentsToImport = studentRows
         .map(({ row, archivedAt: rowArchivedAt }) => {
           const firstName = getExcelValue(row, ["Emri"]);
           const lastName = getExcelValue(row, ["Mbiemri"]);
-          const fullName = getExcelValue(row, ["Nxenesi", "NxÃ«nÃ«si", "Emri Mbiemri"]);
+          const fullName = getExcelValue(row, ["Nxenesi", "Nxënësi", "Emri Mbiemri"]);
           const nameParts = fullName.split(" ").filter(Boolean);
           const finalFirstName = firstName || nameParts[0] || "";
           const finalLastName = lastName || nameParts.slice(1).join(" ");
           const name = [finalFirstName, finalLastName].filter(Boolean).join(" ");
           if (!name) return null;
-          const teacher = teacherByName(getExcelValue(row, ["Mesuesi", "MÃ«suesi", "Teacher"]));
+          const teacher = teacherByName(getExcelValue(row, ["Mesuesi", "Mësuesi", "Teacher"]));
           const student = {
             name,
             firstName: finalFirstName,
@@ -3560,15 +3586,15 @@ export default function App() {
       ];
       const paymentsToImport = paymentRows
         .map(({ row, archivedAt: rowArchivedAt }) => {
-          const studentName = getExcelValue(row, ["Nxenesi", "NxÃ«nÃ«si", "Student"]);
-          const teacherName = getExcelValue(row, ["Mesuesi", "MÃ«suesi", "Teacher"]);
+          const studentName = getExcelValue(row, ["Nxenesi", "Nxënësi", "Student"]);
+          const teacherName = getExcelValue(row, ["Mesuesi", "Mësuesi", "Teacher"]);
           const student = studentByName(studentName);
           const teacher = teacherByName(teacherName);
           const enrollment = enrollmentForImportedStudent(student);
           const amount = parseMoney(getExcelValue(row, ["Shuma", "Pagesa", "Amount"]));
           if (!amount && !studentName) return null;
-          const hours = getExcelValue(row, ["Oret", "OrÃ«t", "Hours"]);
-          const rate = getExcelValue(row, ["Cmimi/ore", "Ã‡mimi/orÃ«", "â‚¬/orÃ«", "Rate"]);
+          const hours = getExcelValue(row, ["Oret", "Orët", "Hours"]);
+          const rate = getExcelValue(row, ["Cmimi/ore", "Çmimi/orë", "€/orë", "Rate"]);
           const payment = {
             studentId: student?.id ?? null,
             studentName: student?.name || studentName || "Pa student",
@@ -3580,13 +3606,13 @@ export default function App() {
             teacherId: teacher?.id ?? enrollment?.teacherId ?? student?.teacherId ?? null,
             teacherName: teacher?.name || enrollment?.teacherName || teacherName || "Pa mesues",
             amount,
-            teacherPercent: parseMoney(getExcelValue(row, ["Mesuesi %", "MÃ«suesi %"])) || 80,
+            teacherPercent: parseMoney(getExcelValue(row, ["Mesuesi %", "Mësuesi %"])) || 80,
             adminPercent: parseMoney(getExcelValue(row, ["Administrata %"])) || 15,
             schoolPercent: parseMoney(getExcelValue(row, ["Shkolla %"])) || 5,
             paymentType: hours ? "hourly" : "fixed",
             hours,
             rate: rate ? parseMoney(rate) : "",
-            note: getExcelValue(row, ["Shenime", "ShÃ«nime", "Note"]),
+            note: getExcelValue(row, ["Shenime", "Shënime", "Note"]),
             date: parseDateInput(getExcelValue(row, ["Data", "Date"])),
           };
           return { ...paymentToRow(payment), archived_at: rowArchivedAt };
@@ -3600,13 +3626,13 @@ export default function App() {
       const expensesToImport = expenseRows
         .map(({ row, archivedAt: rowArchivedAt }) => {
           const name = getExcelValue(row, ["Produkti / Shpenzimi", "Produkti", "Shpenzimi"]);
-          const amount = parseMoney(getExcelValue(row, ["Cmimi", "Ã‡mimi", "Amount"]));
+          const amount = parseMoney(getExcelValue(row, ["Cmimi", "Çmimi", "Amount"]));
           if (!name) return null;
           const expense = {
             name,
             date: parseDateInput(getExcelValue(row, ["Data", "Date"])),
             amount,
-            note: getExcelValue(row, ["Shenime", "ShÃ«nime", "Note"]),
+            note: getExcelValue(row, ["Shenime", "Shënime", "Note"]),
           };
           return { ...expenseToRow(expense), archived_at: rowArchivedAt };
         })
@@ -3660,8 +3686,8 @@ export default function App() {
   );
 
   const navItems = useMemo(() => [
-    { key: "students", label: "NxÃ«nÃ«sit" },
-    { key: "teachers", label: "MÃ«suesit" },
+    { key: "students", label: "Nxënësit" },
+    { key: "teachers", label: "Mësuesit" },
     { key: "payments", label: "Pagesat" },
     { key: "paga", label: "Paga" },
     { key: "finance", label: "Financa" },
@@ -3739,9 +3765,9 @@ export default function App() {
           <div className="mb-4 flex justify-center">
             <BrandMark />
           </div>
-          <h1 className="text-2xl font-bold" style={{ color: PRIMARY }}>Vatra e DiturisÃ«</h1>
+          <h1 className="text-2xl font-bold" style={{ color: PRIMARY }}>Vatra e Diturisë</h1>
           <p className="mt-3 text-gray-600">
-            Ky email nuk ka qasje nÃ« aplikacion. Shto emailin te tabela e mÃ«suesve ose te VITE_ADMIN_EMAILS.
+            Ky email nuk ka qasje në aplikacion. Shto emailin te tabela e mësuesve ose te VITE_ADMIN_EMAILS.
           </p>
           <button type="button" onClick={signOut} className={`${mainBtn} mt-5`} style={dangerBtnStyle}>
             Sign out
@@ -3852,7 +3878,7 @@ export default function App() {
         {canManageData && isLastDayOfMonth && !isMonthEndReminderDismissed && (
           <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <span>Sot Ã«shtÃ« dita e fundit e muajit. Mos harro me i bo export nÃ« Excel tÃ« gjitha tÃ« dhÃ«nat.</span>
+              <span>Sot është dita e fundit e muajit. Mos harro me i bo export në Excel të gjitha të dhënat.</span>
               <button type="button" onClick={() => setIsMonthEndReminderDismissed(true)} className={smallBtn} style={secondaryBtnStyle}>
                 Mbylle
               </button>
@@ -3863,17 +3889,24 @@ export default function App() {
           <div className={`border rounded-lg lg:rounded-2xl shadow-sm ${card} p-3 sm:p-4`}>
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
               <div>
-                <h2 className="text-2xl font-bold" style={{ color: PRIMARY }}>NxÃ«nÃ«sit</h2>
-                <p className="text-gray-500">Menaxho nxÃ«nÃ«sit dhe mÃ«suesin pÃ«rkatÃ«s.</p>
+                <h2 className="text-2xl font-bold" style={{ color: PRIMARY }}>Nxënësit</h2>
+                <p className="text-gray-500">Menaxho nxënësit dhe mësuesin përkatës.</p>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full lg:w-[44rem]">
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 w-full lg:w-[58rem]">
                 {searchField({
                   value: studentSearch,
                   onChange: (e) => setStudentSearch(e.target.value),
-                  placeholder: "KÃ«rko sipas emrit ose mÃ«suesit",
+                  placeholder: "Kërko sipas emrit ose mësuesit",
                 })}
                 <input className={dateInput} type="month" value={studentGroupFilter} onChange={(e) => setStudentGroupFilter(e.target.value)} />
-                <button onClick={() => setStudentGroupFilter("")} className={mainBtn} style={secondaryBtnStyle}>
+                <SearchableSelect
+                  className={input}
+                  value={studentStatusFilter}
+                  onChange={setStudentStatusFilter}
+                  placeholder="Statusi"
+                  options={studentStatusOptions}
+                />
+                <button onClick={() => { setStudentGroupFilter(""); setStudentStatusFilter(""); }} className={mainBtn} style={secondaryBtnStyle}>
                   {actionLabel("clear", "Pastro filtrin")}
                 </button>
               </div>
@@ -3888,8 +3921,8 @@ export default function App() {
                 className="hidden"
                 onChange={importStudentsFromExcel}
               />
-              <button onClick={() => studentImportRef.current?.click()} className={mainBtn} style={secondaryBtnStyle}>{actionLabel("import", "Importo nxÃ«nÃ«s")}</button>
-              <button onClick={() => { setStudentForm({ ...emptyStudentForm, group: currentMonthInput() }); setIsStudentModalOpen(true); }} className={mainBtn} style={primaryBtnStyle}>{actionLabel("add", "Shto nxÃ«nÃ«s")}</button>
+              <button onClick={() => studentImportRef.current?.click()} className={mainBtn} style={secondaryBtnStyle}>{actionLabel("import", "Importo nxënës")}</button>
+              <button onClick={() => { setStudentForm({ ...emptyStudentForm, group: currentMonthInput() }); setIsStudentModalOpen(true); }} className={mainBtn} style={primaryBtnStyle}>{actionLabel("add", "Shto nxënës")}</button>
             </div>
             )}
 
@@ -3905,7 +3938,7 @@ export default function App() {
                     <th className={thClass}>{sortButton("students", "studentGroup", "Grupi")}</th>
                     <th className={thClass}>{sortButton("students", "status", "Statusi")}</th>
                     <th className={thClass}>{sortButton("students", "payment", "Pagesa")}</th>
-                    <th className={thClass}>{sortButton("students", "teacherName", "MÃ«suesi")}</th>
+                    <th className={thClass}>{sortButton("students", "teacherName", "Mësuesi")}</th>
                     <th className={thClass}>Veprime</th>
                   </tr>
                 </thead>
@@ -3976,16 +4009,16 @@ export default function App() {
                               className={input}
                               value={editingStudentTeacherId}
                               onChange={setEditingStudentTeacherId}
-                              placeholder="Zgjedh mÃ«suesin"
+                              placeholder="Zgjedh mësuesin"
                               options={[
-                                { value: "", label: "Zgjedh mÃ«suesin" },
+                                { value: "", label: "Zgjedh mësuesin" },
                                 ...sortedTeachersAlpha.map((teacherOption) => ({
                                   value: teacherOption.id,
                                   label: teacherOption.name,
                                 })),
                               ]}
                             />
-                          ) : (teacher?.name || "Pa mÃ«sues")}
+                          ) : (teacher?.name || "Pa mësues")}
                         </td>
                         <td className={tdClass}>
                           <div className="flex flex-wrap gap-2">
@@ -3996,13 +4029,13 @@ export default function App() {
                               </>
                             ) : canManageData ? (
                               <>
-                                <button onClick={(e) => { e.stopPropagation(); setDetailsStudentId(student.id); }} className={smallBtn} style={primaryBtnStyle}>{actionLabel("information", "Shfaq tÃ« dhÃ«nat")}</button>
+                                <button onClick={(e) => { e.stopPropagation(); setDetailsStudentId(student.id); }} className={smallBtn} style={primaryBtnStyle}>{actionLabel("information", "Shfaq të dhënat")}</button>
                                 <button onClick={(e) => { e.stopPropagation(); startEditStudent(student); }} className={smallBtn} style={secondaryBtnStyle}>{actionLabel("edit", "Edit")}</button>
                                 <button onClick={(e) => { e.stopPropagation(); openEnrollmentModal(student); }} className={smallBtn} style={primaryBtnStyle}>{actionLabel("courses", "Kurset")}</button>
                                 <button onClick={(e) => { e.stopPropagation(); archiveStudent(student); }} className={smallBtn} style={warningBtnStyle}>{actionLabel("archive", "Archive")}</button>
                               </>
                             ) : (
-                              <button onClick={(e) => { e.stopPropagation(); setDetailsStudentId(student.id); }} className={smallBtn} style={primaryBtnStyle}>{actionLabel("information", "Shfaq tÃ« dhÃ«nat")}</button>
+                              <button onClick={(e) => { e.stopPropagation(); setDetailsStudentId(student.id); }} className={smallBtn} style={primaryBtnStyle}>{actionLabel("information", "Shfaq të dhënat")}</button>
                             )}
                           </div>
                         </td>
@@ -4019,14 +4052,14 @@ export default function App() {
           <div className={`border rounded-lg lg:rounded-2xl shadow-sm ${card} p-3 sm:p-4`}>
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
               <div>
-                <h2 className="text-2xl font-bold" style={{ color: PRIMARY }}>MÃ«suesit</h2>
-                <p className="text-gray-500">Kliko njÃ« mÃ«sues pÃ«r tâ€™i parÃ« nxÃ«nÃ«sit e tij poshtÃ«.</p>
+                <h2 className="text-2xl font-bold" style={{ color: PRIMARY }}>Mësuesit</h2>
+                <p className="text-gray-500">Kliko një mësues për t’i parë nxënësit e tij poshtë.</p>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full lg:w-[44rem]">
                 {searchField({
                   value: teacherSearch,
                   onChange: (e) => setTeacherSearch(e.target.value),
-                  placeholder: "KÃ«rko sipas emrit ose nxÃ«nÃ«sve",
+                  placeholder: "Kërko sipas emrit ose nxënësve",
                 })}
                 <input className={dateInput} type="month" value={teacherMonthFilter} onChange={(e) => setTeacherMonthFilter(e.target.value)} />
                 <button onClick={() => setTeacherMonthFilter("")} className={mainBtn} style={secondaryBtnStyle}>
@@ -4043,9 +4076,9 @@ export default function App() {
                 className={mainBtn}
                 style={teachers.length ? primaryBtnStyle : disabledPrimaryBtnStyle}
               >
-                {actionLabel("assign", "Cakto nxÃ«nÃ«sit")}
+                {actionLabel("assign", "Cakto nxënësit")}
               </button>
-              <button onClick={() => setIsTeacherModalOpen(true)} className={mainBtn} style={secondaryBtnStyle}>{actionLabel("add", "Shto mÃ«sues")}</button>
+              <button onClick={() => setIsTeacherModalOpen(true)} className={mainBtn} style={secondaryBtnStyle}>{actionLabel("add", "Shto mësues")}</button>
             </div>
             )}
 
@@ -4057,8 +4090,8 @@ export default function App() {
                     <th className={thClass}>{sortButton("teachers", "name", "Emri")}</th>
                     <th className={thClass}>{sortButton("teachers", "lastName", "Mbiemri")}</th>
                     <th className={thClass}>{sortButton("teachers", "email", "Email")}</th>
-                    <th className={thClass}>PÃ«rqindja</th>
-                    <th className={thClass}>{sortButton("teachers", "studentsCount", "NxÃ«nÃ«s")}</th>
+                    <th className={thClass}>Përqindja</th>
+                    <th className={thClass}>{sortButton("teachers", "studentsCount", "Nxënës")}</th>
                     <th className={thClass}>Veprime</th>
                   </tr>
                 </thead>
@@ -4085,7 +4118,7 @@ export default function App() {
                             className={input}
                             value={editingTeacherPercent}
                             onChange={setEditingTeacherPercent}
-                            placeholder="PÃ«rqindja"
+                            placeholder="Përqindja"
                             options={percentOptions.map((percent) => ({ value: percent, label: `${percent}%` }))}
                           />
                         ) : `${teacher.percent}%`}</td>
@@ -4103,7 +4136,7 @@ export default function App() {
                                 <button onClick={(e) => { e.stopPropagation(); archiveTeacher(teacher); }} className={smallBtn} style={warningBtnStyle}>{actionLabel("archive", "Archive")}</button>
                               </>
                             ) : (
-                              <span className="text-gray-500">VetÃ«m lexim</span>
+                              <span className="text-gray-500">Vetëm lexim</span>
                             )}
                           </div>
                         </td>
@@ -4116,7 +4149,7 @@ export default function App() {
 
             {selectedTeacherView && (
               <div className="mt-6 border rounded-lg lg:rounded-2xl p-3 sm:p-4 bg-gray-50 border-gray-200">
-                <h3 className="text-lg font-bold mb-3" style={{ color: PRIMARY }}>NxÃ«nÃ«sit e mÃ«suesit tÃ« zgjedhur</h3>
+                <h3 className="text-lg font-bold mb-3" style={{ color: PRIMARY }}>Nxënësit e mësuesit të zgjedhur</h3>
                 <div className={tableWrap}>
                   <table className="min-w-[48rem] w-full text-sm">
                     <thead>
@@ -4144,7 +4177,7 @@ export default function App() {
                       ) : (
                         <tr>
                           <td className={tdClass} colSpan={6}>
-                            {teacherMonthFilter ? "Ky mÃ«sues nuk ka nxÃ«nÃ«s pÃ«r kÃ«tÃ« muaj." : "Ky mÃ«sues nuk ka nxÃ«nÃ«s."}
+                            {teacherMonthFilter ? "Ky mësues nuk ka nxënës për këtë muaj." : "Ky mësues nuk ka nxënës."}
                           </td>
                         </tr>
                       )}
@@ -4161,24 +4194,24 @@ export default function App() {
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
               <div>
                 <h2 className="text-2xl font-bold" style={{ color: PRIMARY }}>Pagesat</h2>
-                <p className="text-gray-500">Menaxho pagesat dhe filtro sipas studentit, mÃ«suesit ose datÃ«s.</p>
+                <p className="text-gray-500">Menaxho pagesat dhe filtro sipas studentit, mësuesit ose datës.</p>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 w-full xl:w-[56rem]">
                 {searchField({
                   value: paymentSearch,
                   onChange: (e) => setPaymentSearch(e.target.value),
-                  placeholder: "KÃ«rko pagesa",
+                  placeholder: "Kërko pagesa",
                 })}
                 <SearchableSelect
                   className={input}
                   value={isTeacherUser ? currentTeacherAccount?.name || "" : activePaymentTeacherFilter}
                   onChange={isTeacherUser ? () => {} : setPaymentTeacherFilter}
-                  placeholder="TÃ« gjithÃ« mÃ«suesit"
+                  placeholder="Të gjithë mësuesit"
                   disabled={isTeacherUser}
                   options={isTeacherUser
-                    ? [{ value: currentTeacherAccount?.name || "", label: currentTeacherAccount?.name || "MÃ«suesi" }]
+                    ? [{ value: currentTeacherAccount?.name || "", label: currentTeacherAccount?.name || "Mësuesi" }]
                     : [
-                        { value: "", label: "TÃ« gjithÃ« mÃ«suesit" },
+                        { value: "", label: "Të gjithë mësuesit" },
                         ...sortedTeachersAlpha.map((teacher) => ({ value: teacher.name, label: teacher.name })),
                       ]}
                 />
@@ -4191,7 +4224,7 @@ export default function App() {
 
             {canManageData && (
             <div className="flex justify-end mb-6">
-              <button onClick={openPaymentModal} className={mainBtn} style={secondaryBtnStyle}>{actionLabel("add", "Shto pagesÃ«")}</button>
+              <button onClick={openPaymentModal} className={mainBtn} style={secondaryBtnStyle}>{actionLabel("add", "Shto pagesë")}</button>
             </div>
             )}
 
@@ -4200,11 +4233,11 @@ export default function App() {
                 <thead>
                   <tr className="border-b border-gray-200">
                     <th className={thClass}>Nr</th>
-                    <th className={thClass}>{sortButton("payments", "studentName", "NxÃ«nÃ«si")}</th>
-                    <th className={thClass}>{sortButton("payments", "teacherName", "MÃ«suesi")}</th>
+                    <th className={thClass}>{sortButton("payments", "studentName", "Nxënësi")}</th>
+                    <th className={thClass}>{sortButton("payments", "teacherName", "Mësuesi")}</th>
                     <th className={thClass}>{sortButton("payments", "amount", "Shuma")}</th>
-                    <th className={thClass}>OrÃ«t</th>
-                    <th className={thClass}>â‚¬/orÃ«</th>
+                    <th className={thClass}>Orët</th>
+                    <th className={thClass}>€/orë</th>
                     <th className={thClass}>{sortButton("payments", "date", "Data")}</th>
                     <th className={thClass}>{sortButton("payments", "note", "Shenime")}</th>
                     <th className={thClass}>Veprime</th>
@@ -4222,9 +4255,9 @@ export default function App() {
                               className={input}
                               value={editingPaymentStudentId}
                               onChange={changeEditingPaymentStudent}
-                              placeholder="Zgjedh nxÃ«nÃ«sin"
+                              placeholder="Zgjedh nxënësin"
                               options={[
-                                { value: "", label: "Zgjedh nxÃ«nÃ«sin" },
+                                { value: "", label: "Zgjedh nxënësin" },
                                 ...sortedStudentsAlpha.map((student) => ({
                                   value: student.id,
                                   label: studentOptionLabel(student),
@@ -4272,7 +4305,7 @@ export default function App() {
                                 <button onClick={() => archivePayment(payment)} className={smallBtn} style={warningBtnStyle}>{actionLabel("archive", "Archive")}</button>
                               </>
                             ) : (
-                              <span className="text-gray-500">VetÃ«m lexim</span>
+                              <span className="text-gray-500">Vetëm lexim</span>
                             )}
                           </div>
                         </td>
@@ -4290,7 +4323,7 @@ export default function App() {
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
               <div>
                 <h2 className="text-2xl font-bold" style={{ color: PRIMARY }}>Paga</h2>
-                <p className="text-gray-500">Paga e mÃ«suesve sipas pÃ«rqindjes, me export Excel/PDF.</p>
+                <p className="text-gray-500">Paga e mësuesve sipas përqindjes, me export Excel/PDF.</p>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 w-full xl:w-auto">
                 <input className={dateInput} type="month" value={financeMonth} onChange={(e) => setFinanceMonth(e.target.value)} />
@@ -4306,12 +4339,12 @@ export default function App() {
                           setFinanceTeacherFilter(nextTeacher);
                         }
                   }
-                  placeholder="TÃ« gjithÃ« mÃ«suesit"
+                  placeholder="Të gjithë mësuesit"
                   disabled={isTeacherUser}
                   options={isTeacherUser
-                    ? [{ value: currentTeacherAccount?.name || "", label: currentTeacherAccount?.name || "MÃ«suesi" }]
+                    ? [{ value: currentTeacherAccount?.name || "", label: currentTeacherAccount?.name || "Mësuesi" }]
                     : [
-                        { value: "", label: "TÃ« gjithÃ« mÃ«suesit" },
+                        { value: "", label: "Të gjithë mësuesit" },
                         ...sortedTeachersAlpha.map((teacher) => ({ value: teacher.name, label: teacher.name })),
                       ]}
                 />
@@ -4325,11 +4358,11 @@ export default function App() {
                 <thead>
                   <tr className="border-b border-gray-200">
                     <th className={thClass}>Nr</th>
-                    <th className={thClass}>{sortButton("paga", "name", "MÃ«suesi")}</th>
+                    <th className={thClass}>{sortButton("paga", "name", "Mësuesi")}</th>
                     <th className={thClass}>%</th>
-                    <th className={thClass}>{sortButton("paga", "studentsCount", "NxÃ«nÃ«s")}</th>
+                    <th className={thClass}>{sortButton("paga", "studentsCount", "Nxënës")}</th>
                     <th className={thClass}>{sortButton("paga", "total", "Total")}</th>
-                    <th className={thClass}>{sortButton("paga", "teacherShare", "MÃ«suesi")}</th>
+                    <th className={thClass}>{sortButton("paga", "teacherShare", "Mësuesi")}</th>
                     <th className={thClass}>{sortButton("paga", "adminShare", "Administrata")}</th>
                     <th className={thClass}>{sortButton("paga", "schoolShare", "Shkolla")}</th>
                     <th className={thClass}>{sortButton("paga", "remainingShare", "Mbetja")}</th>
@@ -4380,7 +4413,7 @@ export default function App() {
             {selectedPagaTeacherView && (
               <div className="mt-6 border rounded-lg lg:rounded-2xl p-3 sm:p-4 bg-gray-50 border-gray-200">
                 <h3 className="text-lg font-bold mb-3" style={{ color: PRIMARY }}>
-                  NxÃ«nÃ«sit qÃ« kanÃ« paguar {selectedPagaTeacher ? `- ${selectedPagaTeacher.name}` : ""}
+                  Nxënësit që kanë paguar {selectedPagaTeacher ? `- ${selectedPagaTeacher.name}` : ""}
                 </h3>
                 <div className={tableWrap}>
                   <table className="min-w-[42rem] w-full text-sm">
@@ -4405,7 +4438,7 @@ export default function App() {
                           </tr>
                         ))
                       ) : (
-                        <tr><td className={tdClass} colSpan={5}>Ky mÃ«sues nuk ka nxÃ«nÃ«s me pagesÃ« pÃ«r kÃ«tÃ« muaj.</td></tr>
+                        <tr><td className={tdClass} colSpan={5}>Ky mësues nuk ka nxënës me pagesë për këtë muaj.</td></tr>
                       )}
                     </tbody>
                   </table>
@@ -4421,7 +4454,7 @@ export default function App() {
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
               <div>
                 <h2 className="text-2xl font-bold" style={{ color: PRIMARY }}>Financa</h2>
-                <p className="text-gray-500">Overview + shpenzimet e shkollÃ«s.</p>
+                <p className="text-gray-500">Overview + shpenzimet e shkollës.</p>
               </div>
               <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-2 lg:w-[24rem]">
                 <input className={dateInput} type="month" value={financeOverviewMonth} onChange={(e) => setFinanceOverviewMonth(e.target.value)} />
@@ -4433,11 +4466,11 @@ export default function App() {
 
             <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-4">
               <div className="p-4 rounded-xl border">
-                <div className="text-gray-500 text-sm">TÃ« hyrat totale</div>
+                <div className="text-gray-500 text-sm">Të hyrat totale</div>
                 <div className="text-xl font-bold">{formatCurrency(overviewIncome)}</div>
               </div>
               <div className="p-4 rounded-xl border">
-                <div className="text-gray-500 text-sm">Pagat e mÃ«suesve</div>
+                <div className="text-gray-500 text-sm">Pagat e mësuesve</div>
                 <div className="text-xl font-bold">{formatCurrency(overviewTeacherPay)}</div>
               </div>
               <div className="p-4 rounded-xl border">
@@ -4453,7 +4486,7 @@ export default function App() {
                 </div>
               </div>
               <div className="p-4 rounded-xl border">
-                <div className="text-gray-500 text-sm">Buxheti i shkollÃ«s</div>
+                <div className="text-gray-500 text-sm">Buxheti i shkollës</div>
                 <div className="text-xl font-bold">{formatCurrency(overviewProfit)}</div>
               </div>
               <div className="p-4 rounded-xl border">
@@ -4481,7 +4514,7 @@ export default function App() {
                     <th className={thClass}>Nr</th>
                     <th className={thClass}>{sortButton("finance", "name", "Produkti")}</th>
                     <th className={thClass}>{sortButton("finance", "date", "Data")}</th>
-                    <th className={thClass}>{sortButton("finance", "amount", "Ã‡mimi")}</th>
+                    <th className={thClass}>{sortButton("finance", "amount", "Çmimi")}</th>
                     <th className={thClass}>Shenime</th>
                     <th className={thClass}>Veprime</th>
                   </tr>
@@ -4525,13 +4558,13 @@ export default function App() {
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
               <div>
                 <h2 className="text-2xl font-bold" style={{ color: PRIMARY }}>Kurset</h2>
-                <p className="text-gray-500">Menaxho kurset dhe Ã§mimet.</p>
+                <p className="text-gray-500">Menaxho kurset dhe çmimet.</p>
               </div>
               <div className="w-full lg:w-80">
                 {searchField({
                   value: courseSearch,
                   onChange: (e) => setCourseSearch(e.target.value),
-                  placeholder: "KÃ«rko sipas kursit ose Ã§mimit",
+                  placeholder: "Kërko sipas kursit ose çmimit",
                 })}
               </div>
             </div>
@@ -4549,7 +4582,7 @@ export default function App() {
                     <th className={thClass}>Nr</th>
                     <th className={thClass}>{sortButton("courses", "name", "Emri i kursit")}</th>
                     <th className={thClass}>{sortButton("courses", "pricingType", "Lloji")}</th>
-                    <th className={thClass}>{sortButton("courses", "price", "Ã‡mimi")}</th>
+                    <th className={thClass}>{sortButton("courses", "price", "Çmimi")}</th>
                     <th className={thClass}>Veprime</th>
                   </tr>
                 </thead>
@@ -4583,7 +4616,7 @@ export default function App() {
                                 <button onClick={() => archiveCourse(course)} className={smallBtn} style={warningBtnStyle}>{actionLabel("archive", "Archive")}</button>
                               </>
                             ) : (
-                              <span className="text-gray-500">VetÃ«m lexim</span>
+                              <span className="text-gray-500">Vetëm lexim</span>
                             )}
                           </div>
                         </td>
@@ -4601,20 +4634,20 @@ export default function App() {
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
               <div>
                 <h2 className="text-2xl font-bold" style={{ color: PRIMARY }}>Arkiva</h2>
-                <p className="text-gray-500">KÃ«tu ruhen tÃ« dhÃ«nat e arkivuara dhe mund tâ€™i kthesh prapÃ« aktive.</p>
+                <p className="text-gray-500">Këtu ruhen të dhënat e arkivuara dhe mund t’i kthesh prapë aktive.</p>
               </div>
               <div className="w-full lg:w-80">
                 {searchField({
                   value: archiveSearch,
                   onChange: (e) => setArchiveSearch(e.target.value),
-                  placeholder: "KÃ«rko nÃ« archive",
+                  placeholder: "Kërko në archive",
                 })}
               </div>
             </div>
 
             <div>
               <div className="flex items-center justify-between mb-3">
-                <h3 className="text-lg font-bold" style={{ color: PRIMARY }}>NxÃ«nÃ«s</h3>
+                <h3 className="text-lg font-bold" style={{ color: PRIMARY }}>Nxënës</h3>
                 <div className="flex gap-2">
                   <button onClick={() => bulkRestore("students")} disabled={!archiveSelection.students.length} className={smallBtn} style={archiveSelection.students.length ? primaryBtnStyle : disabledPrimaryBtnStyle}>{actionLabel("restore", "Restore Selected")}</button>
                   <button onClick={() => bulkDeleteArchived("students")} disabled={!archiveSelection.students.length} className={smallBtn} style={archiveSelection.students.length ? dangerBtnStyle : { background: "#d1d5db", color: "#6b7280", cursor: "not-allowed" }}>{actionLabel("delete", "Delete Selected")}</button>
@@ -4627,7 +4660,7 @@ export default function App() {
                       <th className={thClass}>Nr</th>
                       <th className={thClass}>#</th>
                       <th className={thClass}>{sortButton("archive", "name", "Emri")}</th>
-                      <th className={thClass}>{sortButton("archive", "teacherName", "MÃ«suesi")}</th>
+                      <th className={thClass}>{sortButton("archive", "teacherName", "Mësuesi")}</th>
                       <th className={thClass}>Veprimi</th>
                     </tr>
                   </thead>
@@ -4656,7 +4689,7 @@ export default function App() {
 
             <div>
               <div className="flex items-center justify-between mb-3">
-                <h3 className="text-lg font-bold" style={{ color: PRIMARY }}>MÃ«sues</h3>
+                <h3 className="text-lg font-bold" style={{ color: PRIMARY }}>Mësues</h3>
                 <div className="flex gap-2">
                   <button onClick={() => bulkRestore("teachers")} disabled={!archiveSelection.teachers.length} className={smallBtn} style={archiveSelection.teachers.length ? primaryBtnStyle : disabledPrimaryBtnStyle}>{actionLabel("restore", "Restore Selected")}</button>
                   <button onClick={() => bulkDeleteArchived("teachers")} disabled={!archiveSelection.teachers.length} className={smallBtn} style={archiveSelection.teachers.length ? dangerBtnStyle : { background: "#d1d5db", color: "#6b7280", cursor: "not-allowed" }}>{actionLabel("delete", "Delete Selected")}</button>
@@ -4709,8 +4742,8 @@ export default function App() {
                     <tr className="border-b border-gray-200">
                       <th className={thClass}>Nr</th>
                       <th className={thClass}>#</th>
-                      <th className={thClass}>NxÃ«nÃ«si</th>
-                      <th className={thClass}>MÃ«suesi</th>
+                      <th className={thClass}>Nxënësi</th>
+                      <th className={thClass}>Mësuesi</th>
                       <th className={thClass}>Shuma</th>
                       <th className={thClass}>Data</th>
                       <th className={thClass}>Veprimi</th>
@@ -4722,7 +4755,7 @@ export default function App() {
                         <td className={tdClass}>{index + 1}</td>
                         <td className={tdClass}><input type="checkbox" className={roundCheckbox} checked={archiveSelection.payments.includes(payment.id)} onChange={() => toggleArchiveSelection("payments", payment.id)} /></td>
                         <td className={tdClass}>{payment.studentName || "Pa student"}</td>
-                        <td className={tdClass}>{payment.teacherName || "Pa mÃ«sues"}</td>
+                        <td className={tdClass}>{payment.teacherName || "Pa mësues"}</td>
                         <td className={tdClass}>{formatCurrency(payment.amount)}</td>
                         <td className={tdClass}>{formatDateDisplay(payment.date)}</td>
                         <td className={tdClass}>
@@ -4754,7 +4787,7 @@ export default function App() {
                       <th className={thClass}>#</th>
                       <th className={thClass}>{sortButton("archiveExpenses", "name", "Produkti")}</th>
                       <th className={thClass}>{sortButton("archiveExpenses", "date", "Data")}</th>
-                      <th className={thClass}>{sortButton("archiveExpenses", "amount", "Ã‡mimi")}</th>
+                      <th className={thClass}>{sortButton("archiveExpenses", "amount", "Çmimi")}</th>
                       <th className={thClass}>Shenime</th>
                       <th className={thClass}>Veprimi</th>
                     </tr>
@@ -4797,7 +4830,7 @@ export default function App() {
                       <th className={thClass}>#</th>
                       <th className={thClass}>{sortButton("courses", "name", "Emri i kursit")}</th>
                       <th className={thClass}>{sortButton("courses", "pricingType", "Lloji")}</th>
-                      <th className={thClass}>{sortButton("courses", "price", "Ã‡mimi")}</th>
+                      <th className={thClass}>{sortButton("courses", "price", "Çmimi")}</th>
                       <th className={thClass}>Veprimi</th>
                     </tr>
                   </thead>
@@ -4828,7 +4861,7 @@ export default function App() {
           <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center overflow-y-auto bg-black/40 p-3 sm:p-4" onClick={() => setDetailsStudentId(null)}>
             <div className="my-4 w-full max-w-2xl rounded-lg bg-white p-4 sm:p-6 shadow-xl space-y-4" onClick={(e) => e.stopPropagation()}>
               <div>
-                <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>TÃ« dhÃ«nat e nxÃ«nÃ«sit</h3>
+                <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>Të dhënat e nxënësit</h3>
                 <p className="text-sm text-gray-500">{selectedDetailsStudent.name}</p>
               </div>
 
@@ -4842,7 +4875,7 @@ export default function App() {
                 <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Kursi</span><span className="font-medium">{selectedDetailsStudent.course || "-"}</span></div>
                 <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Muaji</span><span className="font-medium">{formatMonthYear(selectedDetailsStudent.group)}</span></div>
                 <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Grupi</span><span className="font-medium">{selectedDetailsStudent.studentGroup || "-"}</span></div>
-                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">MÃ«suesi</span><span className="font-medium">{selectedDetailsStudent.teacherName || "Pa mÃ«sues"}</span></div>
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Mësuesi</span><span className="font-medium">{selectedDetailsStudent.teacherName || "Pa mësues"}</span></div>
                 <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Statusi</span><span className="font-medium">{enrollmentStatusLabel(selectedDetailsStudent.enrollmentStatus)}</span></div>
                 <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Pagesa</span><span className="font-medium">{isTeacherUser && !sameId(selectedDetailsStudent.teacherId, currentTeacherId) ? "-" : hasStudentCurrentPayment(selectedDetailsStudent) ? "E paguar" : "Pa paguar"}</span></div>
               </div>
@@ -4859,10 +4892,10 @@ export default function App() {
             <div className="my-4 w-full max-w-5xl rounded-lg bg-white p-4 sm:p-6 shadow-xl space-y-5" onClick={(e) => e.stopPropagation()}>
               <div className="flex flex-col gap-1">
                 <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>
-                  Kurset e nxÃ«nÃ«sit {selectedEnrollmentStudent ? `- ${selectedEnrollmentStudent.name}` : ""}
+                  Kurset e nxënësit {selectedEnrollmentStudent ? `- ${selectedEnrollmentStudent.name}` : ""}
                 </h3>
                 <p className="text-sm text-gray-500">
-                  Mbaje historikun e kurseve pa e humbur pagesÃ«n e vjetÃ«r.
+                  Mbaje historikun e kurseve pa e humbur pagesën e vjetër.
                 </p>
               </div>
 
@@ -4873,10 +4906,10 @@ export default function App() {
                       <th className={thClass}>{sortButton("enrollments", "group", "Muaji")}</th>
                       <th className={thClass}>{sortButton("enrollments", "course", "Kursi")}</th>
                       <th className={thClass}>{sortButton("enrollments", "studentGroup", "Grupi")}</th>
-                      <th className={thClass}>{sortButton("enrollments", "teacherName", "MÃ«suesi")}</th>
+                      <th className={thClass}>{sortButton("enrollments", "teacherName", "Mësuesi")}</th>
                       <th className={thClass}>{sortButton("enrollments", "status", "Statusi")}</th>
                       <th className={thClass}>Deri</th>
-                      <th className={thClass}>ShÃ«nime</th>
+                      <th className={thClass}>Shënime</th>
                       <th className={thClass}>Veprime</th>
                     </tr>
                   </thead>
@@ -4889,7 +4922,7 @@ export default function App() {
                             <td className={tdClass}>{formatMonthYear(enrollment.group)}</td>
                             <td className={tdClass}>{enrollment.course || "-"}</td>
                             <td className={tdClass}>{enrollment.studentGroup || "-"}</td>
-                            <td className={tdClass}>{teacher?.name || enrollment.teacherName || "Pa mÃ«sues"}</td>
+                            <td className={tdClass}>{teacher?.name || enrollment.teacherName || "Pa mësues"}</td>
                             <td className={tdClass}>{enrollmentStatusLabel(enrollment.status)}</td>
                             <td className={tdClass}>{formatMonthYear(enrollment.endMonth)}</td>
                             <td className={tdClass}>{enrollment.note || "-"}</td>
@@ -4905,12 +4938,17 @@ export default function App() {
                                 )}
                                 {enrollment.status === "active" && (
                                   <button type="button" onClick={() => updateEnrollmentStatus(enrollment, "completed")} className={smallBtn} style={warningBtnStyle}>
-                                    PÃ«rfundo
+                                    Përfundo
                                   </button>
                                 )}
                                 {enrollment.status !== "inactive" && (
                                   <button type="button" onClick={() => updateEnrollmentStatus(enrollment, "inactive")} className={smallBtn} style={secondaryBtnStyle}>
                                     Joaktiv
+                                  </button>
+                                )}
+                                {canManageData && (
+                                  <button type="button" onClick={() => deleteEnrollment(enrollment)} className={smallBtn} style={dangerBtnStyle}>
+                                    {actionLabel("delete", "Delete")}
                                   </button>
                                 )}
                               </div>
@@ -4919,7 +4957,7 @@ export default function App() {
                         );
                       })
                     ) : (
-                      <tr><td className={tdClass} colSpan={8}>Ky nxÃ«nÃ«s ende nuk ka historik kursi.</td></tr>
+                      <tr><td className={tdClass} colSpan={8}>Ky nxënës ende nuk ka historik kursi.</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -4927,7 +4965,7 @@ export default function App() {
 
               <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 sm:p-4">
                 <h4 className="mb-3 font-bold" style={{ color: PRIMARY }}>
-                  {editingEnrollmentId ? "Ndrysho regjistrimin" : "Shto regjistrim tÃ« ri"}
+                  {editingEnrollmentId ? "Ndrysho regjistrimin" : "Shto regjistrim të ri"}
                 </h4>
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                   <SearchableSelect
@@ -4944,9 +4982,9 @@ export default function App() {
                     className={input}
                     value={enrollmentForm.teacherId}
                     onChange={(nextValue) => setEnrollmentForm((prev) => ({ ...prev, teacherId: nextValue }))}
-                    placeholder="Pa mÃ«sues"
+                    placeholder="Pa mësues"
                     options={[
-                      { value: "", label: "Pa mÃ«sues" },
+                      { value: "", label: "Pa mësues" },
                       ...sortedTeachersAlpha.map((teacher) => ({ value: teacher.id, label: teacher.name })),
                     ]}
                   />
@@ -4960,7 +4998,7 @@ export default function App() {
                     options={enrollmentStatusOptions}
                   />
                   <input className={dateInput} type="month" value={enrollmentForm.endMonth} onChange={(e) => setEnrollmentForm((prev) => ({ ...prev, endMonth: e.target.value }))} aria-label="Deri" title="Deri" disabled={enrollmentForm.status === "active"} />
-                  <input className={`${input} md:col-span-2`} value={enrollmentForm.note} onChange={(e) => setEnrollmentForm((prev) => ({ ...prev, note: e.target.value }))} placeholder="ShÃ«nime" />
+                  <input className={`${input} md:col-span-2`} value={enrollmentForm.note} onChange={(e) => setEnrollmentForm((prev) => ({ ...prev, note: e.target.value }))} placeholder="Shënime" />
                 </div>
                 <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:justify-end">
                   {editingEnrollmentId && (
@@ -4993,7 +5031,7 @@ export default function App() {
             >
               <div>
                 <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>{paymentModalTitle}</h3>
-                <p className="text-sm text-gray-500">Zgjedh nxÃ«nÃ«sin dhe pÃ«rcakto ndarjen e pagesÃ«s.</p>
+                <p className="text-sm text-gray-500">Zgjedh nxënësin dhe përcakto ndarjen e pagesës.</p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -5001,9 +5039,9 @@ export default function App() {
                   className={input}
                   value={selectedStudent}
                   onChange={changePaymentStudent}
-                  placeholder="Zgjedh nxÃ«nÃ«sin"
+                  placeholder="Zgjedh nxënësin"
                   options={[
-                    { value: "", label: "Zgjedh nxÃ«nÃ«sin" },
+                    { value: "", label: "Zgjedh nxënësin" },
                     ...sortedStudentsAlpha.map((student) => ({
                       value: student.id,
                       label: studentOptionLabel(student),
@@ -5024,14 +5062,14 @@ export default function App() {
                 )}
                 {isSelectedPaymentHourly && (
                   <>
-                    <input className={input} value={paymentHours} onChange={(e) => changePaymentHours(e.target.value)} placeholder="OrÃ«t" type="number" min="0" step="0.25" required />
-                    <input className={input} value={paymentRate} onChange={(e) => changePaymentRate(e.target.value)} placeholder="Ã‡mimi pÃ«r orÃ«" type="number" min="0" step="0.01" required />
+                    <input className={input} value={paymentHours} onChange={(e) => changePaymentHours(e.target.value)} placeholder="Orët" type="number" min="0" step="0.25" required />
+                    <input className={input} value={paymentRate} onChange={(e) => changePaymentRate(e.target.value)} placeholder="Çmimi për orë" type="number" min="0" step="0.01" required />
                   </>
                 )}
                 <input className={input} value={paymentAmount} onChange={(e) => setPaymentAmount(e.target.value)} placeholder="Shuma" />
                 <DateTextInput className={dateInput} value={paymentDate} onChange={setPaymentDate} required />
                 <div className="relative min-w-0">
-                  <input className={`${input} pr-9`} type="number" min="0" max="100" step="0.01" value={paymentTeacherPercent} onChange={(e) => setPaymentTeacherPercent(e.target.value)} placeholder="Paga e mÃ«suesit" />
+                  <input className={`${input} pr-9`} type="number" min="0" max="100" step="0.01" value={paymentTeacherPercent} onChange={(e) => setPaymentTeacherPercent(e.target.value)} placeholder="Paga e mësuesit" />
                   <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-500">%</span>
                 </div>
                 <div className="relative min-w-0">
@@ -5065,13 +5103,13 @@ export default function App() {
             >
               <div>
                 <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>Shto shpenzim</h3>
-                <p className="text-sm text-gray-500">PlotÃ«so produktin, datÃ«n dhe Ã§mimin.</p>
+                <p className="text-sm text-gray-500">Plotëso produktin, datën dhe çmimin.</p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <input className={input} value={expenseName} onChange={(e) => setExpenseName(e.target.value)} placeholder="Produkti / Shpenzimi" required />
                 <DateTextInput className={dateInput} value={expenseDate} onChange={setExpenseDate} required />
-                <input className={`${input} md:col-span-2`} type="number" value={expenseAmount} onChange={(e) => setExpenseAmount(e.target.value)} placeholder="Ã‡mimi" min="0" step="0.01" required />
+                <input className={`${input} md:col-span-2`} type="number" value={expenseAmount} onChange={(e) => setExpenseAmount(e.target.value)} placeholder="Çmimi" min="0" step="0.01" required />
                 <input className={`${input} md:col-span-2`} value={expenseNote} onChange={(e) => setExpenseNote(e.target.value)} placeholder="Shenime" />
               </div>
 
@@ -5091,33 +5129,33 @@ export default function App() {
                   <img src={informationIcon} alt="" className="h-5 w-5" />
                 </span>
                 <div>
-                  <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>TÃ« gjitha tÃ« hyrat</h3>
-                  <p className="text-sm text-gray-500">PÃ«rmbledhje prej fillimit tÃ« shkollÃ«s.</p>
+                  <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>Të gjitha të hyrat</h3>
+                  <p className="text-sm text-gray-500">Përmbledhje prej fillimit të shkollës.</p>
                 </div>
               </div>
 
               <div className="grid grid-cols-1 gap-3">
                 <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
-                  <span className="font-medium">TÃ« gjitha tÃ« hyrat e shkollÃ«s prej fillimit</span>
+                  <span className="font-medium">Të gjitha të hyrat e shkollës prej fillimit</span>
                   <span className="font-bold">{formatCurrency(allTimeIncomeOverview.totalIncome)}</span>
                 </div>
                 <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
-                  <span className="font-medium">TÃ« gjitha tÃ« hyrat e administratÃ«s prej fillimit</span>
+                  <span className="font-medium">Të gjitha të hyrat e administratës prej fillimit</span>
                   <span className="font-bold">{formatCurrency(allTimeIncomeOverview.totalAdminShare)}</span>
                 </div>
                 <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
-                  <span className="font-medium">TÃ« gjitha tÃ« hyrat qÃ« i takojnÃ« shkollÃ«s</span>
+                  <span className="font-medium">Të gjitha të hyrat që i takojnë shkollës</span>
                   <span className="font-bold">{formatCurrency(allTimeIncomeOverview.totalSchoolShare)}</span>
                 </div>
               </div>
 
               <div>
-                <h4 className="mb-3 font-bold" style={{ color: PRIMARY }}>TÃ« gjitha pagat prej fillimit pÃ«r secilin mÃ«sues</h4>
+                <h4 className="mb-3 font-bold" style={{ color: PRIMARY }}>Të gjitha pagat prej fillimit për secilin mësues</h4>
                 <div className={tableWrap}>
                   <table className="min-w-[28rem] w-full text-sm">
                     <thead>
                       <tr className="border-b border-gray-200">
-                        <th className={thClass}>MÃ«suesi</th>
+                        <th className={thClass}>Mësuesi</th>
                         <th className={thClass}>Paga</th>
                       </tr>
                     </thead>
@@ -5151,7 +5189,7 @@ export default function App() {
               }}
             >
               <div>
-                <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>ShÃ«nime pÃ«r eksport</h3>
+                <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>Shënime për eksport</h3>
                 <p className="text-sm text-gray-500">Ky tekst vendoset te kolona Shenime.</p>
               </div>
 
@@ -5241,13 +5279,13 @@ export default function App() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <input className={input} value={teacherForm.firstName} onChange={(e) => setTeacherForm((prev) => ({ ...prev, firstName: e.target.value }))} placeholder="Emri" required />
                 <input className={input} value={teacherForm.lastName} onChange={(e) => setTeacherForm((prev) => ({ ...prev, lastName: e.target.value }))} placeholder="Mbiemri" required />
-                <input className={`${input} md:col-span-2`} value={teacherForm.email} onChange={(e) => setTeacherForm((prev) => ({ ...prev, email: e.target.value }))} placeholder="Emaili i mÃ«suesit" type="email" />
+                <input className={`${input} md:col-span-2`} value={teacherForm.email} onChange={(e) => setTeacherForm((prev) => ({ ...prev, email: e.target.value }))} placeholder="Emaili i mësuesit" type="email" />
                 <div className="md:col-span-2">
                   <SearchableSelect
                     className={input}
                     value={teacherForm.percent}
                     onChange={(nextValue) => setTeacherForm((prev) => ({ ...prev, percent: nextValue }))}
-                    placeholder="PÃ«rqindja"
+                    placeholder="Përqindja"
                     options={percentOptions.map((percent) => ({ value: percent, label: `${percent}%` }))}
                   />
                 </div>
@@ -5273,7 +5311,7 @@ export default function App() {
             >
               <div>
                 <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>Shto kurs</h3>
-                <p className="text-sm text-gray-500">PlotÃ«so emrin dhe Ã§mimin e kursit.</p>
+                <p className="text-sm text-gray-500">Plotëso emrin dhe çmimin e kursit.</p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -5285,7 +5323,7 @@ export default function App() {
                   placeholder="Lloji"
                   options={pricingTypeOptions}
                 />
-                <input className={input} value={courseForm.price} onChange={(e) => setCourseForm((prev) => ({ ...prev, price: e.target.value }))} placeholder="Ã‡mimi" type="number" min="0" step="0.01" required />
+                <input className={input} value={courseForm.price} onChange={(e) => setCourseForm((prev) => ({ ...prev, price: e.target.value }))} placeholder="Çmimi" type="number" min="0" step="0.01" required />
               </div>
 
               <div className="flex flex-col sm:flex-row sm:justify-end gap-2">

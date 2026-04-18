@@ -57,9 +57,11 @@ on public.enrollments (teacher_id);
 create index if not exists enrollments_start_month_idx
 on public.enrollments (start_month);
 
-create unique index if not exists enrollments_one_active_per_student_idx
-on public.enrollments (student_id)
-where status = 'active' and archived_at is null;
+drop index if exists public.enrollments_one_active_per_student_idx;
+
+create index if not exists enrollments_active_student_idx
+on public.enrollments (student_id, status)
+where archived_at is null;
 
 alter table public.payments
 add column if not exists enrollment_id text,
