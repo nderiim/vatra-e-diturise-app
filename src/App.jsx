@@ -1,7 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import * as XLSX from "xlsx";
-import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
 import addIcon from "./assets/add.png";
 import archiveIcon from "./assets/archive.png";
 import assignIcon from "./assets/assign.png";
@@ -19,6 +16,26 @@ import searchIcon from "./assets/search.png";
 import settingsIcon from "./assets/settings.png";
 import sidebarIcon from "./assets/sidebar.png";
 import { isSupabaseConfigured, supabase } from "./supabase";
+
+let xlsxModulePromise;
+let pdfModulesPromise;
+
+async function loadXlsx() {
+  if (!xlsxModulePromise) xlsxModulePromise = import("xlsx");
+  return xlsxModulePromise;
+}
+
+async function loadPdfModules() {
+  if (!pdfModulesPromise) {
+    pdfModulesPromise = Promise.all([import("jspdf"), import("jspdf-autotable")]).then(
+      ([jspdfModule, autoTableModule]) => ({
+        jsPDF: jspdfModule.default,
+        autoTable: autoTableModule.default,
+      })
+    );
+  }
+  return pdfModulesPromise;
+}
 
 function formatCurrency(value) {
   return `€${Number(value || 0).toFixed(2)}`;
@@ -56,6 +73,24 @@ function currentDateInput() {
 
 function currentMonthInput() {
   return monthFromDate(new Date().toISOString());
+}
+
+function addMonthsToMonthKey(monthKey, step = 1) {
+  if (!/^\d{4}-\d{2}$/.test(String(monthKey || ""))) return "";
+  const [year, month] = String(monthKey).split("-").map(Number);
+  const nextDate = new Date(Date.UTC(year, month - 1 + step, 1));
+  return `${nextDate.getUTCFullYear()}-${String(nextDate.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function monthRangeKeys(startMonth, endMonth) {
+  if (!startMonth || !endMonth || startMonth > endMonth) return [];
+  const months = [];
+  let pointer = startMonth;
+  while (pointer && pointer <= endMonth) {
+    months.push(pointer);
+    pointer = addMonthsToMonthKey(pointer, 1);
+  }
+  return months;
 }
 
 function formatMonthYear(value) {
@@ -123,14 +158,31 @@ function formatDateDisplay(date) {
   return `${day}-${month}-${year}`;
 }
 
+function formatDateTimeDisplay(date) {
+  if (!date) return "-";
+  const parsed = new Date(date);
+  if (Number.isNaN(parsed.getTime())) return formatDateDisplay(date);
+  const day = String(parsed.getDate()).padStart(2, "0");
+  const month = String(parsed.getMonth() + 1).padStart(2, "0");
+  const year = parsed.getFullYear();
+  const hours = String(parsed.getHours()).padStart(2, "0");
+  const minutes = String(parsed.getMinutes()).padStart(2, "0");
+  return `${day}-${month}-${year} ${hours}:${minutes}`;
+}
+
+function parseExcelSerialDate(value) {
+  if (!Number.isFinite(value)) return "";
+  const excelEpoch = Date.UTC(1899, 11, 30);
+  const parsed = new Date(excelEpoch + Math.round(value * 24 * 60 * 60 * 1000));
+  return Number.isNaN(parsed.getTime()) ? "" : parsed.toISOString();
+}
+
 function parseDateInput(value) {
   if (!value) return new Date().toISOString();
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
   if (typeof value === "number") {
-    const parsed = XLSX.SSF.parse_date_code(value);
-    if (parsed) {
-      return `${parsed.y}-${String(parsed.m).padStart(2, "0")}-${String(parsed.d).padStart(2, "0")}T00:00:00.000Z`;
-    }
+    const parsed = parseExcelSerialDate(value);
+    if (parsed) return parsed;
   }
 
   const rawValue = String(value).trim();
@@ -269,14 +321,14 @@ function getExcelValue(row, keys) {
   return match ? String(match[1] || "").trim() : "";
 }
 
-function getWorkbookRows(workbook, sheetNames) {
+function getWorkbookRows(XLSX, workbook, sheetNames) {
   const normalizedNames = sheetNames.map(normalizeExcelKey);
   const sheetName = workbook.SheetNames.find((name) => normalizedNames.includes(normalizeExcelKey(name)));
   if (!sheetName) return [];
   return XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "" });
 }
 
-function sheetFromRows(rows) {
+function sheetFromRows(XLSX, rows) {
   const worksheet = XLSX.utils.aoa_to_sheet(rows);
   worksheet["!cols"] = rows[0]?.map((_, columnIndex) => ({
     wch: Math.min(
@@ -479,6 +531,7 @@ export default function App() {
   const [payments, setPayments] = useState([]);
   const [courses, setCourses] = useState([]);
   const [enrollments, setEnrollments] = useState([]);
+  const [monthlyObligations, setMonthlyObligations] = useState([]);
   const [archive, setArchive] = useState({
     students: [],
     teachers: [],
@@ -499,6 +552,7 @@ export default function App() {
   const [detailsStudentId, setDetailsStudentId] = useState(null);
   const [isStudentDetailsEditing, setIsStudentDetailsEditing] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [isAuditLogModalOpen, setIsAuditLogModalOpen] = useState(false);
   const [isDuplicateMergeModalOpen, setIsDuplicateMergeModalOpen] = useState(false);
   const [isAllIncomeModalOpen, setIsAllIncomeModalOpen] = useState(false);
   const [isMonthEndReminderDismissed, setIsMonthEndReminderDismissed] = useState(false);
@@ -506,6 +560,13 @@ export default function App() {
   const [session, setSession] = useState(null);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [authError, setAuthError] = useState("");
+  const [auditLog, setAuditLog] = useState([]);
+  const [isAuditLogLoading, setIsAuditLogLoading] = useState(false);
+  const [auditLogError, setAuditLogError] = useState("");
+  const [schemaSupport, setSchemaSupport] = useState({
+    monthlyObligations: false,
+    auditLog: false,
+  });
   const studentImportRef = useRef(null);
   const allDataImportRef = useRef(null);
 
@@ -537,7 +598,7 @@ export default function App() {
   const [paymentSchoolPercent, setPaymentSchoolPercent] = useState(5);
 
   const [studentSearch, setStudentSearch] = useState("");
-  const [studentGroupFilter, setStudentGroupFilter] = useState(currentMonthInput());
+  const [studentGroupFilter, setStudentGroupFilter] = useState("");
   const [studentStatusFilter, setStudentStatusFilter] = useState("active");
   const [teacherSearch, setTeacherSearch] = useState("");
   const [teacherMonthFilter, setTeacherMonthFilter] = useState(currentMonthInput());
@@ -668,6 +729,8 @@ export default function App() {
   const isTeacherUser = Boolean(currentTeacherAccount && !isAdminUser);
   const hasAppAccess = isAdminUser || Boolean(currentTeacherAccount);
   const canManageData = isAdminUser;
+  const canUseMonthlyObligations = schemaSupport.monthlyObligations;
+  const canUseAuditLog = canManageData && schemaSupport.auditLog;
   const today = new Date();
   const isLastDayOfMonth = today.getDate() === new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
   const icons = {
@@ -723,6 +786,95 @@ export default function App() {
   const requestArchiveConfirmation = (type, item) => {
     setArchiveConfirmState({ type, item });
   };
+
+  const auditFieldLabel = (field) => {
+    const labels = {
+      first_name: "Emri",
+      last_name: "Mbiemri",
+      name: "Emri",
+      city: "Qyteti",
+      phone: "Telefoni",
+      email: "Emaili",
+      course_name: "Kursi",
+      teacher_name: "Mesuesi",
+      teacher_id: "Mesuesi ID",
+      student_id: "Nxenesi ID",
+      group_name: "Grupi",
+      start_month: "Muaji",
+      end_month: "Deri",
+      month_key: "Muaji",
+      amount: "Shuma",
+      amount_due: "Shuma e pritur",
+      payment_month: "Muaji i pageses",
+      role: "Roli",
+      percent: "Perqindja",
+      pricing_type: "Lloji",
+      archived_at: "Arkivimi",
+      status: "Statusi",
+      note: "Shenime",
+      payment_type: "Lloji i pageses",
+      hours: "Oret",
+      rate: "Cmimi/ore",
+      date: "Data",
+      updated_at: "Perditesuar",
+      created_at: "Krijuar",
+    };
+    return labels[field] || field.replace(/_/g, " ");
+  };
+
+  const formatAuditValue = (value) => {
+    if (value == null || value === "") return "-";
+    if (typeof value === "boolean") return value ? "Po" : "Jo";
+    if (typeof value === "number") return String(value);
+    if (typeof value === "string") {
+      if (/^\d{4}-\d{2}-\d{2}T/.test(value) || /^\d{4}-\d{2}-\d{2}$/.test(value)) return formatDateDisplay(value);
+      if (/^\d{4}-\d{2}$/.test(value)) return formatMonthYear(value);
+      return value;
+    }
+    return JSON.stringify(value);
+  };
+
+  const auditRecordLabel = (entry) => {
+    const row = entry.newRow || entry.oldRow || {};
+    return (
+      row.name ||
+      [row.first_name, row.last_name].filter(Boolean).join(" ") ||
+      row.student_name ||
+      row.course_name ||
+      row.teacher_name ||
+      row.id ||
+      "-"
+    );
+  };
+
+  const auditActionLabel = (entry) => {
+    if (entry.action === "INSERT") return "Shtuar";
+    if (entry.action === "DELETE") return "Fshire";
+    if (entry.action === "UPDATE") {
+      if (entry.oldRow?.archived_at == null && entry.newRow?.archived_at != null) return "Arkivuar";
+      if (entry.oldRow?.archived_at != null && entry.newRow?.archived_at == null) return "Rikthyer";
+      return "Perditesuar";
+    }
+    return entry.action || "-";
+  };
+
+  const auditChangeSummary = (entry) => {
+    const fields = (entry.changedFields || []).filter((field) => !["updated_at", "created_at"].includes(field));
+    if (!fields.length) return "-";
+    const preview = fields.slice(0, 4).map((field) => {
+      const beforeValue = formatAuditValue(entry.oldRow?.[field]);
+      const afterValue = formatAuditValue(entry.newRow?.[field]);
+      return `${auditFieldLabel(field)}: ${beforeValue} -> ${afterValue}`;
+    });
+    return `${preview.join(" | ")}${fields.length > 4 ? ` | +${fields.length - 4}` : ""}`;
+  };
+
+  const isMonthlyObligationPaid = (obligation) =>
+    payments.some(
+      (payment) =>
+        sameId(payment.enrollmentId, obligation.enrollmentId) &&
+        paymentMonthKey(payment) === obligation.monthKey
+    );
 
   const searchField = ({ value, onChange, placeholder }) => (
     <div className="relative w-full">
@@ -914,11 +1066,41 @@ export default function App() {
     createdAt: row.created_at,
   });
 
+  const normalizeMonthlyObligation = (row) => ({
+    id: row.id,
+    enrollmentId: row.enrollment_id,
+    studentId: row.student_id,
+    teacherId: row.teacher_id,
+    courseId: row.course_id || "",
+    courseName: row.course_name || "",
+    groupName: row.group_name || "",
+    monthKey: row.month_key || "",
+    pricingType: row.pricing_type || "fixed",
+    amountDue: Number(row.amount_due || 0),
+    archivedAt: row.archived_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  });
+
+  const normalizeAuditLog = (row) => ({
+    id: row.id,
+    tableName: row.table_name || "",
+    recordId: row.record_id || "",
+    action: row.action || "",
+    actorEmail: row.actor_email || "",
+    actorUserId: row.actor_user_id || "",
+    oldRow: row.old_row || null,
+    newRow: row.new_row || null,
+    changedFields: Array.isArray(row.changed_fields) ? row.changed_fields : [],
+    createdAt: row.created_at,
+  });
+
   const normalizePayment = (row) => ({
     id: row.id,
     studentId: row.student_id,
     studentName: row.student_name || "",
     enrollmentId: row.enrollment_id || "",
+    monthlyObligationId: row.monthly_obligation_id || "",
     courseId: row.course_id || "",
     courseName: row.course_name || "",
     groupName: row.group_name || "",
@@ -997,6 +1179,7 @@ export default function App() {
     student_id: payment.studentId ?? null,
     student_name: payment.studentName,
     enrollment_id: payment.enrollmentId || null,
+    monthly_obligation_id: payment.monthlyObligationId || null,
     course_id: payment.courseId || null,
     course_name: payment.courseName || "",
     group_name: payment.groupName || "",
@@ -1012,6 +1195,20 @@ export default function App() {
     rate: payment.rate === "" || payment.rate == null ? null : Number(payment.rate),
     note: payment.note || "",
     date: payment.date,
+  });
+
+  const monthlyObligationToRow = (obligation) => ({
+    enrollment_id: obligation.enrollmentId == null ? null : String(obligation.enrollmentId),
+    student_id: obligation.studentId == null ? null : String(obligation.studentId),
+    teacher_id: obligation.teacherId == null || obligation.teacherId === "" ? null : String(obligation.teacherId),
+    course_id: obligation.courseId == null || obligation.courseId === "" ? null : String(obligation.courseId),
+    course_name: obligation.courseName || "",
+    group_name: obligation.groupName || "",
+    month_key: obligation.monthKey || "",
+    pricing_type: obligation.pricingType || "fixed",
+    amount_due: Number(obligation.amountDue || 0),
+    archived_at: obligation.archivedAt || null,
+    updated_at: obligation.updatedAt || new Date().toISOString(),
   });
 
   const expenseToRow = (expense) => ({
@@ -1043,29 +1240,199 @@ export default function App() {
     return rows.filter((row) => !sameId(row.id, id));
   };
 
+  const isMissingTableError = (error, tableName) =>
+    Boolean(
+      error &&
+      (error.code === "42P01" ||
+        error.message?.toLowerCase().includes(String(tableName || "").toLowerCase()))
+    );
+
+  const paymentMonthKey = (payment) => payment?.paymentMonth || monthFromDate(payment?.date);
+  const monthlyObligationKey = (row) => `${row.enrollmentId}::${row.monthKey}`;
+  const courseForEnrollment = (enrollment, courseRows = courses) =>
+    courseRows.find((item) => sameId(item.id, enrollment?.courseId) || item.name === enrollment?.course) || null;
+
+  const monthlyObligationComparable = (row) => ({
+    enrollmentId: row.enrollmentId == null ? "" : String(row.enrollmentId),
+    studentId: row.studentId == null ? "" : String(row.studentId),
+    teacherId: row.teacherId == null ? "" : String(row.teacherId),
+    courseId: row.courseId == null ? "" : String(row.courseId),
+    courseName: row.courseName || "",
+    groupName: row.groupName || "",
+    monthKey: row.monthKey || "",
+    pricingType: row.pricingType || "fixed",
+    amountDue: Number(row.amountDue || 0),
+    archivedAt: row.archivedAt || null,
+  });
+
+  const enrollmentAppliesToMonth = (enrollment, monthKey) => {
+    if (!monthKey || !enrollment?.group || monthKey < enrollment.group) return false;
+    if ((enrollment.status || "active") === "active") return true;
+    const terminalMonth = enrollment.endMonth || enrollment.group;
+    return Boolean(terminalMonth && monthKey <= terminalMonth);
+  };
+
+  const expectedMonthsForEnrollment = (enrollment, ceilingMonth = currentMonthInput()) => {
+    const startMonth = enrollment?.group || "";
+    if (!startMonth) return [];
+    const endMonth =
+      (enrollment.status || "active") === "active"
+        ? ceilingMonth
+        : [enrollment.endMonth || startMonth, ceilingMonth].filter(Boolean).sort()[0];
+    return monthRangeKeys(startMonth, endMonth);
+  };
+
+  const buildMonthlyObligation = (enrollment, monthKey, courseRows = courses, teacherRows = teachers) => {
+    const course = courseForEnrollment(enrollment, courseRows);
+    const teacher = teacherRows.find((item) => sameId(item.id, enrollment.teacherId));
+    return {
+      enrollmentId: enrollment.id,
+      studentId: enrollment.studentId,
+      teacherId: enrollment.teacherId || null,
+      courseId: course?.id || enrollment.courseId || "",
+      courseName: enrollment.course || course?.name || "",
+      groupName: enrollment.studentGroup || "",
+      monthKey,
+      pricingType: course?.pricingType || "fixed",
+      amountDue: (course?.pricingType || "fixed") === "hourly" ? 0 : Number(course?.price || 0),
+      archivedAt: null,
+      updatedAt: new Date().toISOString(),
+      teacherName: teacher?.name || enrollment.teacherName || "",
+    };
+  };
+
+  const paymentMatchesEnrollmentMonth = (payment, enrollment, monthKey) => {
+    if (!payment || !enrollment || paymentMonthKey(payment) !== monthKey) return false;
+    if (sameId(payment.enrollmentId, enrollment.id)) return true;
+    if (!sameId(payment.studentId, enrollment.studentId)) return false;
+
+    const sameCourse =
+      sameId(payment.courseId, enrollment.courseId) ||
+      normalizeExcelKey(payment.courseName) === normalizeExcelKey(enrollment.course);
+    const sameGroup =
+      !payment.groupName ||
+      !enrollment.studentGroup ||
+      normalizeExcelKey(payment.groupName) === normalizeExcelKey(enrollment.studentGroup);
+
+    return sameCourse && sameGroup;
+  };
+
+  const syncMonthlyObligationsSnapshot = async ({
+    enrollmentRows,
+    courseRows,
+    teacherRows,
+    paymentRows,
+    obligationRows,
+  }) => {
+    if (!supabase || !canManageData) return obligationRows || [];
+
+    const desiredMap = new Map();
+    (enrollmentRows || [])
+      .filter((enrollment) => !enrollment.archivedAt && enrollment.course)
+      .forEach((enrollment) => {
+        expectedMonthsForEnrollment(enrollment).forEach((monthKey) => {
+          const obligation = buildMonthlyObligation(enrollment, monthKey, courseRows, teacherRows);
+          desiredMap.set(monthlyObligationKey(obligation), obligation);
+        });
+      });
+
+    const allExisting = obligationRows || [];
+    const existingByKey = new Map(allExisting.map((row) => [monthlyObligationKey(row), row]));
+    const upsertRows = [];
+
+    desiredMap.forEach((desired, key) => {
+      const existing = existingByKey.get(key);
+      if (!existing || !rowsAreEqual(monthlyObligationComparable(existing), monthlyObligationComparable(desired))) {
+        upsertRows.push(desired);
+      }
+    });
+
+    const archiveIds = allExisting
+      .filter((row) => !row.archivedAt && !desiredMap.has(monthlyObligationKey(row)))
+      .filter((row) => !paymentRows.some((payment) => sameId(payment.enrollmentId, row.enrollmentId) && paymentMonthKey(payment) === row.monthKey))
+      .map((row) => row.id);
+
+    let nextRows = allExisting.filter((row) => !archiveIds.some((id) => sameId(id, row.id)));
+
+    if (upsertRows.length) {
+      const { data, error } = await supabase
+        .from("monthly_obligations")
+        .upsert(upsertRows.map(monthlyObligationToRow), { onConflict: "enrollment_id,month_key" })
+        .select("*");
+      if (error) throw error;
+      const normalizedRows = (data || []).map(normalizeMonthlyObligation);
+      normalizedRows.forEach((row) => {
+        nextRows = upsertById(nextRows, row);
+      });
+    }
+
+    if (archiveIds.length) {
+      const timestamp = new Date().toISOString();
+      const { data, error } = await supabase
+        .from("monthly_obligations")
+        .update({ archived_at: timestamp, updated_at: timestamp })
+        .in("id", archiveIds)
+        .select("*");
+      if (error) throw error;
+      nextRows = nextRows.filter((row) => !archiveIds.some((id) => sameId(id, row.id)));
+      (data || []).map(normalizeMonthlyObligation).forEach((row) => {
+        if (!row.archivedAt) nextRows = upsertById(nextRows, row);
+      });
+    }
+
+    return nextRows.filter((row) => !row.archivedAt);
+  };
+
+  const ensureMonthlyObligationForEnrollmentMonth = async (enrollment, monthKey) => {
+    if (!supabase || !canManageData || !schemaSupport.monthlyObligations || !enrollment?.id || !monthKey) return null;
+    if (!enrollmentAppliesToMonth(enrollment, monthKey)) return null;
+
+    const desired = buildMonthlyObligation(enrollment, monthKey);
+    const existing =
+      monthlyObligations.find(
+        (row) => sameId(row.enrollmentId, enrollment.id) && row.monthKey === monthKey
+      ) || null;
+
+    if (existing && rowsAreEqual(monthlyObligationComparable(existing), monthlyObligationComparable(desired))) {
+      return existing;
+    }
+
+    const { data, error } = await supabase
+      .from("monthly_obligations")
+      .upsert([monthlyObligationToRow(desired)], { onConflict: "enrollment_id,month_key" })
+      .select("*")
+      .single();
+    if (error) throw error;
+
+    const savedRow = normalizeMonthlyObligation(data);
+    setMonthlyObligations((prev) => upsertById(prev, savedRow));
+    return savedRow;
+  };
+
   const loadSupabaseData = async ({ showLoading = true } = {}) => {
     if (!supabase) return;
 
     if (showLoading) setIsDataLoading(true);
     setDataError("");
 
-    const [studentsResult, teachersResult, coursesResult, enrollmentsResult, paymentsResult, expensesResult] = await Promise.all([
+    const [studentsResult, teachersResult, coursesResult, enrollmentsResult, obligationsResult, paymentsResult, expensesResult] = await Promise.all([
       supabase.from("students").select("*"),
       supabase.from("teachers").select("*"),
       supabase.from("courses").select("*"),
       supabase.from("enrollments").select("*"),
+      supabase.from("monthly_obligations").select("*"),
       supabase.from("payments").select("*"),
       supabase.from("expenses").select("*"),
     ]);
 
-    const enrollmentsTableMissing =
-      enrollmentsResult.error &&
-      (enrollmentsResult.error.code === "42P01" || enrollmentsResult.error.message?.toLowerCase().includes("enrollments"));
+    const enrollmentsTableMissing = isMissingTableError(enrollmentsResult.error, "enrollments");
+    const obligationsTableMissing = isMissingTableError(obligationsResult.error, "monthly_obligations");
     const firstError = [
       studentsResult,
       teachersResult,
       coursesResult,
       enrollmentsTableMissing ? { error: null } : enrollmentsResult,
+      obligationsTableMissing ? { error: null } : obligationsResult,
       paymentsResult,
       expensesResult,
     ].find((result) => result.error)?.error;
@@ -1082,13 +1449,31 @@ export default function App() {
     const nextEnrollments = enrollmentsTableMissing
       ? { active: [], archived: [] }
       : splitArchived(enrollmentsResult.data || [], normalizeEnrollment);
+    const nextMonthlyObligations = obligationsTableMissing
+      ? []
+      : (obligationsResult.data || []).map(normalizeMonthlyObligation).filter((row) => !row.archivedAt);
     const nextPayments = splitArchived(paymentsResult.data || [], normalizePayment);
     const nextExpenses = splitArchived(expensesResult.data || [], normalizeExpense);
+    let syncedMonthlyObligations = nextMonthlyObligations;
+    if (!obligationsTableMissing && canManageData) {
+      try {
+        syncedMonthlyObligations = await syncMonthlyObligationsSnapshot({
+          enrollmentRows: nextEnrollments.active,
+          courseRows: nextCourses.active,
+          teacherRows: nextTeachers.active,
+          paymentRows: nextPayments.active,
+          obligationRows: nextMonthlyObligations,
+        });
+      } catch (error) {
+        setDataError(error?.message || "Monthly obligations sync failed.");
+      }
+    }
 
     setStudents(nextStudents.active);
     setTeachers(nextTeachers.active);
     setCourses(nextCourses.active);
     setEnrollments(nextEnrollments.active);
+    setMonthlyObligations(syncedMonthlyObligations);
     setPayments(nextPayments.active);
     setExpenses(nextExpenses.active);
     setArchive({
@@ -1098,6 +1483,10 @@ export default function App() {
       payments: nextPayments.archived,
       expenses: nextExpenses.archived,
     });
+    setSchemaSupport((prev) => ({
+      ...prev,
+      monthlyObligations: !obligationsTableMissing,
+    }));
     setHasLoadedData(true);
     if (showLoading) setIsDataLoading(false);
   };
@@ -1136,6 +1525,41 @@ export default function App() {
     const message = error?.message || "Supabase action failed.";
     setDataError(message);
     window.alert(message);
+  };
+
+  const loadAuditLog = async () => {
+    if (!supabase || !canManageData) return;
+
+    setIsAuditLogLoading(true);
+    setAuditLogError("");
+    const { data, error } = await supabase
+      .from("audit_log")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(200);
+
+    if (isMissingTableError(error, "audit_log")) {
+      setSchemaSupport((prev) => ({ ...prev, auditLog: false }));
+      setAuditLog([]);
+      setAuditLogError("Historiku nuk eshte aktiv ende. Ekzekuto SQL migrimin e ri ne Supabase.");
+      setIsAuditLogLoading(false);
+      return;
+    }
+
+    if (error) {
+      setAuditLogError(error.message || "Nuk u lexua historiku.");
+      setIsAuditLogLoading(false);
+      return;
+    }
+
+    setSchemaSupport((prev) => ({ ...prev, auditLog: true }));
+    setAuditLog((data || []).map(normalizeAuditLog));
+    setIsAuditLogLoading(false);
+  };
+
+  const openAuditLogModal = async () => {
+    setIsAuditLogModalOpen(true);
+    await loadAuditLog();
   };
 
   const mergeDuplicateStudents = () => {
@@ -1434,12 +1858,45 @@ export default function App() {
         }
         setEnrollments((prev) => upsertById(prev, normalizedEnrollment));
       }
+      if (table === "monthly_obligations") {
+        if (isDelete) {
+          setMonthlyObligations((prev) => removeById(prev, id));
+          return;
+        }
+        const normalizedObligation = normalizeMonthlyObligation(payload.new);
+        if (normalizedObligation.archivedAt) {
+          setMonthlyObligations((prev) => removeById(prev, normalizedObligation.id));
+          return;
+        }
+        setMonthlyObligations((prev) => upsertById(prev, normalizedObligation));
+      }
       if (table === "payments") syncActiveAndArchive(setPayments, "payments", normalizePayment);
       if (table === "expenses") syncActiveAndArchive(setExpenses, "expenses", normalizeExpense);
+      if (table === "audit_log") {
+        if (isDelete) {
+          setAuditLog((prev) => removeById(prev, id));
+          return;
+        }
+        const normalizedLog = normalizeAuditLog(payload.new);
+        setAuditLog((prev) => {
+          const nextRows = upsertById(prev, normalizedLog);
+          return [...nextRows].sort((first, second) => new Date(second.createdAt) - new Date(first.createdAt));
+        });
+      }
     };
 
     const channel = supabase.channel("app-data-realtime");
-    ["students", "teachers", "courses", "enrollments", "payments", "expenses"].forEach((table) => {
+    const realtimeTables = [
+      "students",
+      "teachers",
+      "courses",
+      "enrollments",
+      "payments",
+      "expenses",
+      ...(schemaSupport.monthlyObligations ? ["monthly_obligations"] : []),
+      ...(isAdminUser && schemaSupport.auditLog ? ["audit_log"] : []),
+    ];
+    realtimeTables.forEach((table) => {
       channel.on(
         "postgres_changes",
         { event: "*", schema: "public", table },
@@ -1463,7 +1920,7 @@ export default function App() {
       supabase.removeChannel(channel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session]);
+  }, [isAdminUser, schemaSupport.auditLog, schemaSupport.monthlyObligations, session]);
 
   const signInWithGoogle = async () => {
     setAuthError("");
@@ -1500,6 +1957,8 @@ export default function App() {
     }
 
     setIsSettingsModalOpen(false);
+    setIsAuditLogModalOpen(false);
+    setAuditLog([]);
   };
 
   const sortRows = (rows, table, getters) => {
@@ -1625,6 +2084,7 @@ export default function App() {
       const savedStudent = await insertRow("students", studentToRow(nextStudent), normalizeStudent);
       await saveEnrollment(buildEnrollmentFromStudent(nextStudent, savedStudent.id));
       setStudents((prev) => [...prev, savedStudent]);
+      await loadSupabaseData({ showLoading: false });
       setStudentForm(emptyStudentForm);
       setIsStudentModalOpen(false);
     } catch (error) {
@@ -1637,6 +2097,7 @@ export default function App() {
     if (!file) return;
 
     try {
+      const XLSX = await loadXlsx();
       const buffer = await file.arrayBuffer();
       const workbook = XLSX.read(buffer, { type: "array" });
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
@@ -1696,6 +2157,7 @@ export default function App() {
       if (savedEnrollmentsResult.error) throw savedEnrollmentsResult.error;
       setStudents((prev) => [...prev, ...savedStudents]);
       setEnrollments((prev) => [...prev, ...(savedEnrollmentsResult.data || []).map(normalizeEnrollment)]);
+      await loadSupabaseData({ showLoading: false });
       window.alert(`U importuan ${importedStudents.length} nxenes.`);
     } catch (error) {
       reportDataError(error);
@@ -1737,6 +2199,7 @@ export default function App() {
     try {
       const savedCourse = await insertRow("courses", courseToRow(nextCourse), normalizeCourse);
       setCourses((prev) => [...prev, savedCourse]);
+      await loadSupabaseData({ showLoading: false });
       setCourseForm(emptyCourseForm);
       setIsCourseModalOpen(false);
     } catch (error) {
@@ -1761,6 +2224,7 @@ export default function App() {
     try {
       const savedCourse = await updateRow("courses", editingCourseId, courseToRow(nextCourse), normalizeCourse);
       setCourses((prev) => prev.map((course) => (course.id === editingCourseId ? savedCourse || { ...course, ...nextCourse } : course)));
+      await loadSupabaseData({ showLoading: false });
       setEditingCourseId(null);
       setEditingCourseName("");
       setEditingCoursePrice("");
@@ -1789,8 +2253,15 @@ export default function App() {
     setSelectedStudent(studentId);
     const student = studentsWithEnrollment.find((s) => sameId(s.id, studentId));
     const enrollmentOptions = paymentEnrollmentOptionsForStudent(studentId);
+    const selectedMonth = (paymentDate ? monthFromDate(paymentDate) : "") || activeStudentPaymentMonth || currentPaymentMonth;
+    const unpaidEnrollment = enrollmentOptions.find(
+      (enrollment) =>
+        enrollmentAppliesToMonth(enrollment, selectedMonth) &&
+        !payments.some((payment) => paymentMatchesEnrollmentMonth(payment, enrollment, selectedMonth))
+    );
     const selectedEnrollment =
       enrollmentOptions.find((enrollment) => sameId(enrollment.id, enrollmentId)) ||
+      unpaidEnrollment ||
       enrollmentOptions.find((enrollment) => enrollment.status === "active") ||
       enrollmentOptions[0] ||
       null;
@@ -1815,6 +2286,7 @@ export default function App() {
   const openPaymentModalForStudent = (student) => {
     openPaymentModal();
     setPaymentModalTitle(`Pagesa - ${student.name || "Nxënësi"}`);
+    if (activeStudentPaymentMonth) setPaymentDate(`${activeStudentPaymentMonth}-01`);
     setPaymentDefaultsForStudent(student.id);
   };
 
@@ -1851,15 +2323,28 @@ export default function App() {
         ? getStudentCourse(student)
         : null;
     const isHourly = isHourlyCourse(course);
+    const paymentMonth = paymentDate ? monthFromDate(paymentDate) : currentPaymentMonth;
+    let monthlyObligationId = "";
+
+    if (enrollment) {
+      try {
+        const obligation = await ensureMonthlyObligationForEnrollmentMonth(enrollment, paymentMonth);
+        monthlyObligationId = obligation?.id || "";
+      } catch (error) {
+        reportDataError(error);
+        return;
+      }
+    }
     const nextPayment = 
       {
         studentId: selectedStudent,
         studentName: student?.name || "Pa student",
         enrollmentId: enrollment?.id || student?.enrollmentId || "",
+        monthlyObligationId,
         courseId: enrollment?.courseId || student?.courseId || "",
         courseName: enrollment?.course || student?.course || "",
         groupName: enrollment?.studentGroup || student?.studentGroup || "",
-        paymentMonth: paymentDate ? monthFromDate(paymentDate) : currentPaymentMonth,
+        paymentMonth,
         teacherId: enrollment?.teacherId ?? student?.teacherId ?? null,
         teacherName: teacher?.name || "Pa mësues",
         amount: parseMoney(paymentAmount),
@@ -2141,6 +2626,7 @@ export default function App() {
       if (savedEnrollment.status === "active") {
         await updateStudentMirrorFromEnrollment(enrollmentStudentId, savedEnrollment);
       }
+      await loadSupabaseData({ showLoading: false });
       const selectedStudent = studentsWithEnrollment.find((student) => sameId(student.id, enrollmentStudentId));
       resetEnrollmentForm(selectedStudent);
     } catch (error) {
@@ -2163,6 +2649,7 @@ export default function App() {
       if (savedEnrollment.status === "active") {
         await updateStudentMirrorFromEnrollment(enrollment.studentId, savedEnrollment);
       }
+      await loadSupabaseData({ showLoading: false });
     } catch (error) {
       reportDataError(error);
     }
@@ -2201,6 +2688,7 @@ export default function App() {
         setEditingEnrollmentId(null);
         setEnrollmentForm({ ...emptyEnrollmentForm, group: currentMonthInput() });
       }
+      await loadSupabaseData({ showLoading: false });
     } catch (error) {
       reportDataError(error);
     }
@@ -2268,6 +2756,7 @@ export default function App() {
       const savedStudent = await updateRow("students", editingStudentId, studentToRow(nextStudent), normalizeStudent);
       await saveActiveEnrollmentForStudent(editingStudentId, nextStudent);
       setStudents((prev) => prev.map((student) => (student.id === editingStudentId ? savedStudent || { ...student, ...nextStudent } : student)));
+      await loadSupabaseData({ showLoading: false });
       cancelEditStudent();
       return true;
     } catch (error) {
@@ -2477,16 +2966,30 @@ export default function App() {
         ? getStudentCourse(student)
         : null;
     const isHourly = editingPaymentType === "hourly" || isHourlyCourse(course);
+    const paymentMonth = monthFromDate(editingPaymentDate);
+    let monthlyObligationId = existingPayment?.monthlyObligationId || "";
+
+    if (enrollment) {
+      try {
+        const obligation = await ensureMonthlyObligationForEnrollmentMonth(enrollment, paymentMonth);
+        monthlyObligationId = obligation?.id || monthlyObligationId;
+      } catch (error) {
+        reportDataError(error);
+        return;
+      }
+    }
+
     const nextPayment = 
       {
         amount: parseMoney(editingPaymentAmount),
         studentId: editingPaymentStudentId,
         studentName: student?.name || existingPayment?.studentName || "Pa student",
         enrollmentId: enrollment?.id || existingPayment?.enrollmentId || "",
+        monthlyObligationId,
         courseId: enrollment?.courseId || existingPayment?.courseId || "",
         courseName: enrollment?.course || existingPayment?.courseName || "",
         groupName: enrollment?.studentGroup || existingPayment?.groupName || "",
-        paymentMonth: monthFromDate(editingPaymentDate),
+        paymentMonth,
         teacherId: enrollment?.teacherId ?? student?.teacherId ?? null,
         teacherName: teacher?.name || existingPayment?.teacherName || "Pa mësues",
         teacherPercent: existingPayment?.teacherPercent ?? 80,
@@ -2574,15 +3077,41 @@ export default function App() {
   };
 
   const currentPaymentMonth = monthFromDate(new Date().toISOString());
+  const activeStudentPaymentMonth = studentGroupFilter || currentPaymentMonth;
 
   const getStudentCourse = (student) => courses.find((course) => sameId(course.id, student.courseId) || course.name === student.course);
-  const getStudentCurrentPayments = (student) =>
+  const studentExpectedEnrollmentsForMonth = (student, monthKey = activeStudentPaymentMonth) =>
+    studentEnrollmentRows(student.id).filter((enrollment) => enrollmentAppliesToMonth(enrollment, monthKey));
+  const studentPaymentsForMonth = (student, monthKey = activeStudentPaymentMonth) =>
     payments.filter(
       (payment) =>
         sameId(payment.studentId, student.id) &&
-        monthFromDate(payment.date) === currentPaymentMonth
+        paymentMonthKey(payment) === monthKey
     );
-  const hasStudentCurrentPayment = (student) => getStudentCurrentPayments(student).length > 0;
+  const studentPaymentStatus = (student, monthKey = activeStudentPaymentMonth) => {
+    const expectedEnrollments = studentExpectedEnrollmentsForMonth(student, monthKey);
+    const matchingPayments = studentPaymentsForMonth(student, monthKey);
+    if (!expectedEnrollments.length) {
+      return {
+        hasObligation: false,
+        isPaid: false,
+        expectedEnrollments: [],
+        matchingPayments: [],
+      };
+    }
+
+    const paidEnrollments = expectedEnrollments.filter((enrollment) =>
+      matchingPayments.some((payment) => paymentMatchesEnrollmentMonth(payment, enrollment, monthKey))
+    );
+
+    return {
+      hasObligation: true,
+      isPaid: paidEnrollments.length === expectedEnrollments.length,
+      expectedEnrollments,
+      matchingPayments,
+    };
+  };
+  const hasStudentCurrentPayment = (student) => studentPaymentStatus(student, activeStudentPaymentMonth).isPaid;
   const paymentTeacherPercentValue = (payment, teacher) => Number(payment.teacherPercent ?? teacher?.percent ?? 80);
   const paymentAdminPercentValue = (payment) => Number(payment.adminPercent ?? 15);
   const paymentSchoolPercentValue = (payment) => Number(payment.schoolPercent ?? 5);
@@ -2605,7 +3134,7 @@ export default function App() {
   const adjustedTeacherPaymentRows = useCallback(
     (teacher, teacherPayments) => {
       const paymentsByMonth = teacherPayments.reduce((groups, payment) => {
-        const monthKey = monthFromDate(payment.date) || "";
+        const monthKey = paymentMonthKey(payment) || "";
         if (!groups[monthKey]) groups[monthKey] = [];
         groups[monthKey].push(payment);
         return groups;
@@ -2683,14 +3212,18 @@ export default function App() {
     ].some((value) => String(value || "").toLowerCase().includes(q));
   });
   const filteredStudentsByGroup = filteredStudents.filter((student) => {
-    const matchesGroup = studentGroupFilter ? student.group === studentGroupFilter : true;
+    const matchesGroup = studentGroupFilter ? studentExpectedEnrollmentsForMonth(student, studentGroupFilter).length > 0 : true;
     const matchesStatus = studentStatusFilter ? student.enrollmentStatus === studentStatusFilter : true;
     return matchesGroup && matchesStatus;
   });
 
   const selectedTeacherStudents = studentsWithEnrollment.filter((student) => {
-    const matchesTeacher = sameId(student.teacherId, selectedTeacherView);
-    const matchesMonth = teacherMonthFilter ? student.group === teacherMonthFilter : true;
+    const matchesTeacher = studentEnrollmentRows(student.id).some((enrollment) => sameId(enrollment.teacherId, selectedTeacherView));
+    const matchesMonth = teacherMonthFilter
+      ? studentEnrollmentRows(student.id).some(
+          (enrollment) => sameId(enrollment.teacherId, selectedTeacherView) && enrollmentAppliesToMonth(enrollment, teacherMonthFilter)
+        )
+      : true;
     return matchesTeacher && matchesMonth;
   });
   const sortedSelectedTeacherStudents = sortRows(selectedTeacherStudents, "selectedTeacherStudents", {
@@ -2719,7 +3252,7 @@ export default function App() {
       teacherName: payment.teacherName || teacher?.name || "Pa mësues",
       courseName: payment.courseName || enrollment?.course || student?.course || "",
       groupName: payment.groupName || enrollment?.studentGroup || student?.studentGroup || "",
-      month: monthFromDate(payment.date),
+      month: paymentMonthKey(payment),
     };
   });
 
@@ -2737,7 +3270,7 @@ export default function App() {
         formatDateDisplay(payment.date).includes(q);
 
     const matchesTeacher = !activePaymentTeacherFilter ? true : payment.teacherName === activePaymentTeacherFilter;
-    const matchesMonth = paymentMonthFilter ? monthFromDate(payment.date) === paymentMonthFilter : true;
+    const matchesMonth = paymentMonthFilter ? paymentMonthKey(payment) === paymentMonthFilter : true;
     return matchesSearch && matchesTeacher && matchesMonth;
   });
 
@@ -2758,7 +3291,7 @@ export default function App() {
         const teacherStudents = studentsWithEnrollment.filter((student) => sameId(student.teacherId, teacher.id));
         const relevantPayments = paymentsForCurrentUser.filter((payment) => {
           const sameTeacher = sameId(paymentTeacherId(payment), teacher.id);
-          const sameMonth = financeMonth ? monthFromDate(payment.date) === financeMonth : true;
+          const sameMonth = financeMonth ? paymentMonthKey(payment) === financeMonth : true;
           return sameTeacher && sameMonth;
         });
         const notes = [...new Set(relevantPayments.map((payment) => payment.note).filter(Boolean))].join("; ");
@@ -2835,7 +3368,7 @@ export default function App() {
       (payment.studentName || "").toLowerCase().includes(q) ||
       (payment.teacherName || "").toLowerCase().includes(q) ||
       String(payment.amount).includes(q) ||
-      monthFromDate(payment.date).includes(q) ||
+      paymentMonthKey(payment).includes(q) ||
       formatDateDisplay(payment.date).includes(q)
     );
   });
@@ -2930,7 +3463,7 @@ export default function App() {
       const student = paymentStudent(payment);
       const enrollment = paymentEnrollment(payment);
       if (!sameId(paymentTeacherId(payment), selectedPagaTeacherView)) return;
-      if (financeMonth && monthFromDate(payment.date) !== financeMonth) return;
+      if (financeMonth && paymentMonthKey(payment) !== financeMonth) return;
 
       const key = payment.studentId || payment.studentName || payment.id;
       const existingRow = rowsByStudent.get(key);
@@ -2955,7 +3488,7 @@ export default function App() {
     .flatMap((teacher) => {
       const teacherPayments = paymentsForCurrentUser.filter((payment) => {
         const matchesTeacher = sameId(paymentTeacherId(payment), teacher.id);
-        const matchesMonth = financeMonth ? monthFromDate(payment.date) === financeMonth : true;
+        const matchesMonth = financeMonth ? paymentMonthKey(payment) === financeMonth : true;
         return matchesTeacher && matchesMonth;
       });
       return adjustedTeacherPaymentRows(teacher, teacherPayments).map((row) => {
@@ -2974,7 +3507,7 @@ export default function App() {
 
   const financeExportTotal = financePaymentRows.reduce((sum, row) => sum + row.teacherPayment, 0);
   const financeExportTeacherName = isTeacherUser ? currentTeacherAccount?.name || "" : activeFinanceTeacherFilter;
-  const overviewPayments = payments.filter((payment) => (financeOverviewMonth ? monthFromDate(payment.date) === financeOverviewMonth : true));
+  const overviewPayments = payments.filter((payment) => (financeOverviewMonth ? paymentMonthKey(payment) === financeOverviewMonth : true));
   const overviewIncome = overviewPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
   const overviewTeacherPay = teachers.reduce((sum, teacher) => {
     const teacherPayments = overviewPayments.filter((payment) => sameId(paymentTeacherId(payment), teacher.id));
@@ -2991,7 +3524,7 @@ export default function App() {
   const overviewExpenses = expenses
     .filter((expense) => monthFromDate(expense.date) === financeOverviewMonth)
     .reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
-  const carriedPayments = payments.filter((payment) => monthIsOnOrBefore(payment.date, financeOverviewMonth));
+  const carriedPayments = payments.filter((payment) => monthIsOnOrBefore(paymentMonthKey(payment), financeOverviewMonth));
   const carriedSchoolShare = teachers.reduce((sum, teacher) => {
     const teacherPayments = carriedPayments.filter((payment) => sameId(paymentTeacherId(payment), teacher.id));
     return sum + summarizeTeacherPayments(teacher, teacherPayments).schoolShare;
@@ -3130,9 +3663,9 @@ export default function App() {
     setIsFinanceExportNoteModalOpen(true);
   };
 
-  const submitFinanceExportNote = () => {
-    if (pendingFinanceExportType === "excel") exportFinanceExcel(financeExportNote);
-    if (pendingFinanceExportType === "pdf") exportFinancePdf(financeExportNote);
+  const submitFinanceExportNote = async () => {
+    if (pendingFinanceExportType === "excel") await exportFinanceExcel(financeExportNote);
+    if (pendingFinanceExportType === "pdf") await exportFinancePdf(financeExportNote);
     setIsFinanceExportNoteModalOpen(false);
     setPendingFinanceExportType("");
     setFinanceExportNote("");
@@ -3153,7 +3686,7 @@ export default function App() {
         ]),
   ];
 
-  const exportFinanceExcel = (note = "") => {
+  const exportFinanceExcel = async (note = "") => {
     const rows = buildFinanceExportRows(note);
     const tableRows = rows
       .map((row, rowIndex) => {
@@ -3189,7 +3722,8 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
-  const exportFinancePdf = (note = "") => {
+  const exportFinancePdf = async (note = "") => {
+    const { jsPDF, autoTable } = await loadPdfModules();
     const doc = new jsPDF({ orientation: "landscape" });
     const title = financeExportTeacherName ? `Financa - ${financeExportTeacherName}` : "Financa - Te gjithe mesuesit";
     doc.setFontSize(14);
@@ -3235,7 +3769,7 @@ export default function App() {
     ...filteredExpenses.map((expense) => [expense.name, formatDateDisplay(expense.date), formatExportCurrency(expense.amount), expense.note || ""]),
   ];
 
-  const exportExpensesExcel = () => {
+  const exportExpensesExcel = async () => {
     const rows = buildExpenseExportRows();
     const tableRows = rows
       .map((row, rowIndex) => {
@@ -3266,7 +3800,8 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
-  const exportExpensesPdf = () => {
+  const exportExpensesPdf = async () => {
+    const { jsPDF, autoTable } = await loadPdfModules();
     const doc = new jsPDF({ orientation: "landscape" });
     const title = financeOverviewMonth ? `Shpenzime - ${formatMonthYear(financeOverviewMonth)}` : "Shpenzime - Te gjitha";
     doc.setFontSize(14);
@@ -3289,7 +3824,8 @@ export default function App() {
     doc.save(`shpenzime_${suffix}.pdf`);
   };
 
-  const exportAllData = () => {
+  const exportAllData = async () => {
+    const XLSX = await loadXlsx();
     const workbook = XLSX.utils.book_new();
     const teacherById = (id) => teachers.find((teacher) => sameId(teacher.id, id));
     const studentById = (id) => studentsWithEnrollment.find((student) => sameId(student.id, id));
@@ -3376,6 +3912,31 @@ export default function App() {
           }),
         ],
       },
+      ...(canUseMonthlyObligations
+        ? [
+            {
+              name: "Detyrimet Mujore",
+              rows: [
+                ["Nr", "Nxenesi", "Kursi", "Muaji", "Grupi", "Mesuesi", "Lloji", "Shuma e pritur", "Statusi"],
+                ...monthlyObligations.map((obligation, index) => {
+                  const student = studentById(obligation.studentId);
+                  const teacher = teacherById(obligation.teacherId);
+                  return [
+                    index + 1,
+                    student?.name || "Pa student",
+                    obligation.courseName || "",
+                    formatMonthYear(obligation.monthKey),
+                    obligation.groupName || "",
+                    teacher?.name || "Pa mesues",
+                    pricingTypeLabel(obligation.pricingType),
+                    formatExportCurrency(obligation.amountDue),
+                    isMonthlyObligationPaid(obligation) ? "E paguar" : "Ne pritje",
+                  ];
+                }),
+              ],
+            },
+          ]
+        : []),
       {
         name: "Pagesat",
         rows: [
@@ -3509,15 +4070,34 @@ export default function App() {
           ]),
         ],
       },
+      ...(canUseAuditLog
+        ? [
+            {
+              name: "Historiku",
+              rows: [
+                ["Nr", "Data", "Perdoruesi", "Tabela", "Veprimi", "Rekordi", "Ndryshimet"],
+                ...auditLog.map((entry, index) => [
+                  index + 1,
+                  formatDateTimeDisplay(entry.createdAt),
+                  entry.actorEmail || "-",
+                  entry.tableName || "-",
+                  auditActionLabel(entry),
+                  auditRecordLabel(entry),
+                  auditChangeSummary(entry),
+                ]),
+              ],
+            },
+          ]
+        : []),
     ];
 
     const months = [...new Set([
-      ...payments.map((payment) => monthFromDate(payment.date)),
+      ...payments.map((payment) => paymentMonthKey(payment)),
       ...expenses.map((expense) => monthFromDate(expense.date)),
       ...enrollments.map((enrollment) => enrollment.group),
     ].filter(Boolean))].sort();
     const monthlySheets = months.flatMap((month) => {
-      const monthPayments = payments.filter((payment) => monthFromDate(payment.date) === month);
+      const monthPayments = payments.filter((payment) => paymentMonthKey(payment) === month);
       const monthExpenses = expenses.filter((expense) => monthFromDate(expense.date) === month);
       const monthTeacherRows = teachers.map((teacher, index) => {
         const teacherPayments = monthPayments.filter((payment) => sameId(paymentTeacher(payment)?.id, teacher.id));
@@ -3605,7 +4185,7 @@ export default function App() {
     });
 
     [...sheets, ...monthlySheets].forEach((sheet) => {
-      XLSX.utils.book_append_sheet(workbook, sheetFromRows(sheet.rows), sheet.name);
+      XLSX.utils.book_append_sheet(workbook, sheetFromRows(XLSX, sheet.rows), sheet.name);
     });
     XLSX.writeFile(workbook, `vatra_export_${currentDateInput()}.xlsx`);
   };
@@ -3615,18 +4195,19 @@ export default function App() {
     if (!file || !canManageData) return;
 
     try {
+      const XLSX = await loadXlsx();
       const buffer = await file.arrayBuffer();
       const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
       const archivedAt = new Date().toISOString();
       const teacherRows = [
-        ...getWorkbookRows(workbook, ["Stafi"]).map((row) => ({ row, archivedAt: null })),
-        ...getWorkbookRows(workbook, ["Mesuesit", "Mësuesit"]).map((row) => ({ row, archivedAt: null })),
-        ...getWorkbookRows(workbook, ["Archive Stafi"]).map((row) => ({ row, archivedAt })),
-        ...getWorkbookRows(workbook, ["Archive Mesues", "Archive Mësues"]).map((row) => ({ row, archivedAt })),
+        ...getWorkbookRows(XLSX, workbook, ["Stafi"]).map((row) => ({ row, archivedAt: null })),
+        ...getWorkbookRows(XLSX, workbook, ["Mesuesit", "Mësuesit"]).map((row) => ({ row, archivedAt: null })),
+        ...getWorkbookRows(XLSX, workbook, ["Archive Stafi"]).map((row) => ({ row, archivedAt })),
+        ...getWorkbookRows(XLSX, workbook, ["Archive Mesues", "Archive Mësues"]).map((row) => ({ row, archivedAt })),
       ];
       const courseRows = [
-        ...getWorkbookRows(workbook, ["Kurset"]).map((row) => ({ row, archivedAt: null })),
-        ...getWorkbookRows(workbook, ["Archive Kurse"]).map((row) => ({ row, archivedAt })),
+        ...getWorkbookRows(XLSX, workbook, ["Kurset"]).map((row) => ({ row, archivedAt: null })),
+        ...getWorkbookRows(XLSX, workbook, ["Archive Kurse"]).map((row) => ({ row, archivedAt })),
       ];
 
       const teachersToImport = teacherRows
@@ -3678,8 +4259,8 @@ export default function App() {
         teacherLookup.find((teacher) => normalizeExcelKey(teacher.name) === normalizeExcelKey(name));
 
       const studentRows = [
-        ...getWorkbookRows(workbook, ["Nxenesit", "Nxënësit"]).map((row) => ({ row, archivedAt: null })),
-        ...getWorkbookRows(workbook, ["Archive Nxenes", "Archive Nxënës"]).map((row) => ({ row, archivedAt })),
+        ...getWorkbookRows(XLSX, workbook, ["Nxenesit", "Nxënësit"]).map((row) => ({ row, archivedAt: null })),
+        ...getWorkbookRows(XLSX, workbook, ["Archive Nxenes", "Archive Nxënës"]).map((row) => ({ row, archivedAt })),
       ];
       const studentsToImport = studentRows
         .map(({ row, archivedAt: rowArchivedAt }) => {
@@ -3731,8 +4312,8 @@ export default function App() {
         studentLookup.find((student) => normalizeExcelKey(student.name) === normalizeExcelKey(name));
 
       const paymentRows = [
-        ...getWorkbookRows(workbook, ["Pagesat"]).map((row) => ({ row, archivedAt: null })),
-        ...getWorkbookRows(workbook, ["Archive Pagesa"]).map((row) => ({ row, archivedAt })),
+        ...getWorkbookRows(XLSX, workbook, ["Pagesat"]).map((row) => ({ row, archivedAt: null })),
+        ...getWorkbookRows(XLSX, workbook, ["Archive Pagesa"]).map((row) => ({ row, archivedAt })),
       ];
       const paymentsToImport = paymentRows
         .map(({ row, archivedAt: rowArchivedAt }) => {
@@ -3770,8 +4351,8 @@ export default function App() {
         .filter(Boolean);
 
       const expenseRows = [
-        ...getWorkbookRows(workbook, ["Shpenzime"]).map((row) => ({ row, archivedAt: null })),
-        ...getWorkbookRows(workbook, ["Archive Shpenzime"]).map((row) => ({ row, archivedAt })),
+        ...getWorkbookRows(XLSX, workbook, ["Shpenzime"]).map((row) => ({ row, archivedAt: null })),
+        ...getWorkbookRows(XLSX, workbook, ["Archive Shpenzime"]).map((row) => ({ row, archivedAt })),
       ];
       const expensesToImport = expenseRows
         .map(({ row, archivedAt: rowArchivedAt }) => {
@@ -4097,7 +4678,8 @@ export default function App() {
                   {sortedStudents.map((student, index) => {
                     const teacher = teachers.find((t) => sameId(t.id, student.teacherId));
                     const isEditing = editingStudentId === student.id;
-                    const hasPayment = hasStudentCurrentPayment(student);
+                    const paymentStatus = studentPaymentStatus(student, activeStudentPaymentMonth);
+                    const hasPayment = paymentStatus.isPaid;
                     return (
                       <tr key={student.id} className={rowHover}>
                         <td className={tdClass}>{index + 1}</td>
@@ -4123,6 +4705,8 @@ export default function App() {
                         <td className={tdClass}>{enrollmentStatusLabel(student.enrollmentStatus)}</td>
                         <td className={tdClass}>
                           {isTeacherUser && !sameId(student.teacherId, currentTeacherId) ? (
+                            "-"
+                          ) : !paymentStatus.hasObligation ? (
                             "-"
                           ) : hasPayment && !isEditing ? (
                             <img
@@ -5033,7 +5617,7 @@ export default function App() {
                   </div>
                 ) : <span className="font-medium">{selectedDetailsStudent.teacherName || "Pa mësues"}</span>}</div>
                 <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Statusi</span><span className="font-medium">{enrollmentStatusLabel(selectedDetailsStudent.enrollmentStatus)}</span></div>
-                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Pagesa</span><span className="font-medium">{isTeacherUser && !sameId(selectedDetailsStudent.teacherId, currentTeacherId) ? "-" : hasStudentCurrentPayment(selectedDetailsStudent) ? "E paguar" : "Pa paguar"}</span></div>
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Pagesa</span><span className="font-medium">{isTeacherUser && !sameId(selectedDetailsStudent.teacherId, currentTeacherId) ? "-" : !studentPaymentStatus(selectedDetailsStudent, activeStudentPaymentMonth).hasObligation ? "-" : hasStudentCurrentPayment(selectedDetailsStudent) ? "E paguar" : "Pa paguar"}</span></div>
               </div>
 
               <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
@@ -5738,6 +6322,9 @@ export default function App() {
                     <button type="button" onClick={() => allDataImportRef.current?.click()} className={mainBtn} style={secondaryBtnStyle}>
                       {actionLabel("import", "Importo te gjitha")}
                     </button>
+                    <button type="button" onClick={openAuditLogModal} className={mainBtn} style={secondaryBtnStyle}>
+                      {actionLabel("information", "Historiku i ndryshimeve")}
+                    </button>
                     <button type="button" onClick={mergeDuplicateStudents} className={mainBtn} style={warningBtnStyle}>
                       Bashko duplikatet ({duplicateStudentGroups.length})
                     </button>
@@ -5750,6 +6337,73 @@ export default function App() {
 
               <div className="flex flex-col sm:flex-row sm:justify-end gap-2">
                 <button type="button" onClick={() => setIsSettingsModalOpen(false)} className={smallBtn} style={secondaryBtnStyle}>Close</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isAuditLogModalOpen && (
+          <div className="fixed inset-0 z-[60] flex items-start sm:items-center justify-center overflow-y-auto bg-black/40 p-3 sm:p-4" onClick={() => setIsAuditLogModalOpen(false)}>
+            <div className="my-4 w-full max-w-6xl rounded-lg bg-white p-4 sm:p-6 shadow-xl space-y-4" onClick={(e) => e.stopPropagation()}>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>Historiku i ndryshimeve</h3>
+                  <p className="text-sm text-gray-500">Shfaqen 200 ndryshimet e fundit nga databaza.</p>
+                </div>
+                <button type="button" onClick={loadAuditLog} className={smallBtn} style={secondaryBtnStyle}>
+                  {actionLabel("information", "Rifresko")}
+                </button>
+              </div>
+
+              {isAuditLogLoading && (
+                <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
+                  Duke lexuar historikun...
+                </div>
+              )}
+
+              {auditLogError && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  {auditLogError}
+                </div>
+              )}
+
+              {!isAuditLogLoading && !auditLogError && (
+                <div className={tableWrap}>
+                  <table className="min-w-[72rem] w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-200">
+                        <th className={thClass}>Data</th>
+                        <th className={thClass}>Perdoruesi</th>
+                        <th className={thClass}>Tabela</th>
+                        <th className={thClass}>Veprimi</th>
+                        <th className={thClass}>Rekordi</th>
+                        <th className={thClass}>Ndryshimet</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {auditLog.length ? (
+                        auditLog.map((entry) => (
+                          <tr key={entry.id} className={rowHover}>
+                            <td className={tdClass}>{formatDateTimeDisplay(entry.createdAt)}</td>
+                            <td className={tdClass}>{entry.actorEmail || "-"}</td>
+                            <td className={tdClass}>{entry.tableName || "-"}</td>
+                            <td className={tdClass}>{auditActionLabel(entry)}</td>
+                            <td className={tdClass}>{auditRecordLabel(entry)}</td>
+                            <td className={`${tdClass} whitespace-normal min-w-[22rem]`}>{auditChangeSummary(entry)}</td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td className={tdClass} colSpan={6}>Nuk ka ndryshime per t'u shfaqur.</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+                <button type="button" onClick={() => setIsAuditLogModalOpen(false)} className={smallBtn} style={secondaryBtnStyle}>Close</button>
               </div>
             </div>
           </div>
