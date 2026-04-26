@@ -137,6 +137,21 @@ function formatMonthYear(value) {
   return monthNames[Number(month) - 1] && year ? `${monthNames[Number(month) - 1]} ${year}` : value;
 }
 
+function formatStudentGroupLabel(value) {
+  const rawValue = String(value || "").trim();
+  if (!rawValue) return "";
+  const groupMatch = rawValue.match(/^gr\.?\s*(.+)$/i);
+  if (groupMatch?.[1]) return `Gr. ${groupMatch[1].trim()}`;
+  if (/^\d+$/.test(rawValue)) return `Gr. ${rawValue}`;
+  return rawValue;
+}
+
+function formatGroupDisplay(monthKey, groupName) {
+  const monthLabel = monthKey ? formatMonthYear(monthKey) : "";
+  const groupLabel = formatStudentGroupLabel(groupName);
+  return [monthLabel && monthLabel !== "-" ? monthLabel : "", groupLabel].filter(Boolean).join(" - ") || "-";
+}
+
 function parseMonthYear(value) {
   const rawValue = String(value || "").trim();
   if (!rawValue) return "";
@@ -3420,6 +3435,7 @@ export default function App() {
       student.phone,
       student.email,
       student.course,
+      formatGroupDisplay(student.group, student.studentGroup),
       formatMonthYear(student.group),
       student.studentGroup,
       enrollmentStatusLabel(student.enrollmentStatus),
@@ -3451,6 +3467,7 @@ export default function App() {
           student?.firstName,
           student?.lastName,
           enrollment.course,
+          formatGroupDisplay(enrollment.group, enrollment.studentGroup),
           enrollment.studentGroup,
           teacher?.name,
           formatDateDisplay(activeAttendanceDate),
@@ -3469,7 +3486,8 @@ export default function App() {
           course: enrollment.course || student?.course || "-",
           teacherId: enrollment.teacherId || null,
           teacherName: teacher?.name || enrollment.teacherName || "Pa mesues",
-          studentGroup: enrollment.studentGroup || student?.studentGroup || "-",
+          group: enrollment.group || student?.group || "",
+          studentGroup: enrollment.studentGroup || student?.studentGroup || "",
           date: activeAttendanceDate,
           status: record?.status || "",
           recordId: record?.id || "",
@@ -3497,7 +3515,7 @@ export default function App() {
     lastName: (row) => row.lastName,
     course: (row) => row.course,
     teacherName: (row) => row.teacherName,
-    studentGroup: (row) => row.studentGroup,
+    studentGroup: (row) => formatGroupDisplay(row.group, row.studentGroup),
     date: (row) => row.date,
     status: (row) => row.status,
   });
@@ -3604,8 +3622,8 @@ export default function App() {
     name: (student) => student.firstName || student.name,
     lastName: (student) => student.lastName,
     course: (student) => student.course,
-    group: (student) => student.group,
-    studentGroup: (student) => student.studentGroup,
+    group: (student) => formatGroupDisplay(student.group, student.studentGroup),
+    studentGroup: (student) => formatGroupDisplay(student.group, student.studentGroup),
   });
 
   const activePaymentTeacherFilter = paymentTeacherFilter && teachers.some((t) => t.name === paymentTeacherFilter) ? paymentTeacherFilter : "";
@@ -3781,8 +3799,8 @@ export default function App() {
     age: (student) => student.age,
     city: (student) => student.city,
     course: (student) => student.course,
-    group: (student) => student.group,
-    studentGroup: (student) => student.studentGroup,
+    group: (student) => formatGroupDisplay(student.group, student.studentGroup),
+    studentGroup: (student) => formatGroupDisplay(student.group, student.studentGroup),
     status: (student) => enrollmentStatusLabel(student.enrollmentStatus),
     teacherName: (student) => student.teacherName || teachers.find((teacher) => sameId(teacher.id, student.teacherId))?.name || "Pa mesues",
     payment: (student) => (hasStudentCurrentPayment(student) ? 1 : 0),
@@ -5051,8 +5069,7 @@ export default function App() {
                     <th className={thClass}>{sortButton("students", "firstName", "Emri")}</th>
                     <th className={thClass}>{sortButton("students", "lastName", "Mbiemri")}</th>
                     <th className={thClass}>{sortButton("students", "course", "Kursi")}</th>
-                    <th className={thClass}>{sortButton("students", "group", "Muaji")}</th>
-                    <th className={thClass}>{sortButton("students", "studentGroup", "Grupi")}</th>
+                    <th className={thClass}>{sortButton("students", "group", "Grupi")}</th>
                     <th className={thClass}>{sortButton("students", "status", "Statusi")}</th>
                     <th className={thClass}>{sortButton("students", "payment", "Pagesa")}</th>
                     <th className={thClass}>{sortButton("students", "teacherName", "Mësuesi")}</th>
@@ -5085,8 +5102,14 @@ export default function App() {
                             ]}
                           />
                         ) : (student.course || "-")}</td>
-                        <td className={tdClass}>{isEditing ? <MonthTextInput className={dateInput} value={editingStudentGroup} onChange={setEditingStudentGroup} /> : formatMonthYear(student.group)}</td>
-                        <td className={tdClass}>{isEditing ? <input className={input} value={editingStudentStudentGroup} onChange={(e) => setEditingStudentStudentGroup(e.target.value)} placeholder="gr1" /> : (student.studentGroup || "-")}</td>
+                        <td className={tdClass}>
+                          {isEditing ? (
+                            <div className="grid min-w-[16rem] grid-cols-1 gap-2 sm:grid-cols-2">
+                              <MonthTextInput className={dateInput} value={editingStudentGroup} onChange={setEditingStudentGroup} />
+                              <input className={input} value={editingStudentStudentGroup} onChange={(e) => setEditingStudentStudentGroup(e.target.value)} placeholder="gr1" />
+                            </div>
+                          ) : formatGroupDisplay(student.group, student.studentGroup)}
+                        </td>
                         <td className={tdClass}>{enrollmentStatusLabel(student.enrollmentStatus)}</td>
                         <td className={tdClass}>
                           {isTeacherUser && !sameId(student.teacherId, currentTeacherId) ? (
@@ -5229,7 +5252,7 @@ export default function App() {
                         <td className={tdClass}>{row.lastName || "-"}</td>
                         <td className={tdClass}>{row.course || "-"}</td>
                         <td className={tdClass}>{row.teacherName || "-"}</td>
-                        <td className={tdClass}>{row.studentGroup || "-"}</td>
+                        <td className={tdClass}>{formatGroupDisplay(row.group, row.studentGroup)}</td>
                         <td className={tdClass}>{formatDateDisplay(row.date)}</td>
                         <td className={tdClass}>
                           {row.status === "present" ? (
@@ -5390,8 +5413,7 @@ export default function App() {
                         <th className={thClass}>{sortButton("selectedTeacherStudents", "name", "Emri")}</th>
                         <th className={thClass}>{sortButton("selectedTeacherStudents", "lastName", "Mbiemri")}</th>
                         <th className={thClass}>{sortButton("selectedTeacherStudents", "course", "Kursi")}</th>
-                        <th className={thClass}>{sortButton("selectedTeacherStudents", "group", "Muaji")}</th>
-                        <th className={thClass}>{sortButton("selectedTeacherStudents", "studentGroup", "Grupi")}</th>
+                        <th className={thClass}>{sortButton("selectedTeacherStudents", "group", "Grupi")}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -5402,13 +5424,12 @@ export default function App() {
                             <td className={tdClass}>{student.firstName || student.name}</td>
                             <td className={tdClass}>{student.lastName || "-"}</td>
                             <td className={tdClass}>{student.course || "-"}</td>
-                            <td className={tdClass}>{formatMonthYear(student.group)}</td>
-                            <td className={tdClass}>{student.studentGroup || "-"}</td>
+                            <td className={tdClass}>{formatGroupDisplay(student.group, student.studentGroup)}</td>
                           </tr>
                         ))
                       ) : (
                         <tr>
-                          <td className={tdClass} colSpan={6}>
+                          <td className={tdClass} colSpan={5}>
                             {teacherMonthFilter ? "Ky anëtar i stafit nuk ka nxënës për këtë muaj." : "Ky anëtar i stafit nuk ka nxënës."}
                           </td>
                         </tr>
