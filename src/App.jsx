@@ -93,6 +93,30 @@ function monthRangeKeys(startMonth, endMonth) {
   return months;
 }
 
+function monthCalendarDays(monthKey) {
+  if (!/^\d{4}-\d{2}$/.test(String(monthKey || ""))) return [];
+  const [year, month] = String(monthKey).split("-").map(Number);
+  const firstDay = new Date(year, month - 1, 1);
+  const firstWeekday = (firstDay.getDay() + 6) % 7;
+  const gridStart = new Date(year, month - 1, 1 - firstWeekday);
+  const days = [];
+
+  for (let index = 0; index < 42; index += 1) {
+    const current = new Date(gridStart);
+    current.setDate(gridStart.getDate() + index);
+    const currentYear = current.getFullYear();
+    const currentMonth = String(current.getMonth() + 1).padStart(2, "0");
+    const currentDay = String(current.getDate()).padStart(2, "0");
+    days.push({
+      isoDate: `${currentYear}-${currentMonth}-${currentDay}`,
+      label: current.getDate(),
+      inCurrentMonth: current.getMonth() === month - 1,
+    });
+  }
+
+  return days;
+}
+
 function formatMonthYear(value) {
   if (!value) return "-";
   const [year, month] = String(value).split("-");
@@ -209,6 +233,31 @@ function formatDateInputDisplay(value) {
   if (!isoValue) return "";
   const [year, month, day] = isoValue.split("-");
   return `${day}-${month}-${year}`;
+}
+
+function formatMonthInputDisplay(value) {
+  const normalizedValue = parseMonthDisplayValue(value);
+  if (!normalizedValue) return String(value || "").trim();
+  const [year, month] = normalizedValue.split("-");
+  return `${month}-${year}`;
+}
+
+function parseMonthDisplayValue(value) {
+  const rawValue = String(value || "").trim();
+  if (!rawValue) return "";
+
+  const isoMatch = rawValue.match(/^(\d{4})-(\d{1,2})$/);
+  const displayMatch = rawValue.match(/^(\d{1,2})[-/.](\d{4})$/);
+  const year = isoMatch?.[1] || displayMatch?.[2];
+  const month = isoMatch?.[2] || displayMatch?.[1];
+
+  if (!year || !month) return "";
+
+  const paddedMonth = String(month).padStart(2, "0");
+  const monthNumber = Number(paddedMonth);
+  if (!monthNumber || monthNumber < 1 || monthNumber > 12) return "";
+
+  return `${year}-${paddedMonth}`;
 }
 
 function parseDateDisplayValue(value) {
@@ -503,6 +552,49 @@ function DateTextInput({ value, onChange, className = "", placeholder = "DD-MM-Y
   );
 }
 
+function MonthTextInput({ value, onChange, className = "", placeholder = "MM-YYYY", ...props }) {
+  const [displayValue, setDisplayValue] = useState(formatMonthInputDisplay(value));
+
+  useEffect(() => {
+    setDisplayValue(formatMonthInputDisplay(value));
+  }, [value]);
+
+  const commitValue = (nextDisplayValue) => {
+    const parsedValue = parseMonthDisplayValue(nextDisplayValue);
+    if (parsedValue) {
+      onChange(parsedValue);
+      setDisplayValue(formatMonthInputDisplay(parsedValue));
+      return;
+    }
+
+    if (!nextDisplayValue.trim()) {
+      onChange("");
+      setDisplayValue("");
+      return;
+    }
+
+    setDisplayValue(formatMonthInputDisplay(value));
+  };
+
+  return (
+    <input
+      {...props}
+      type="text"
+      inputMode="numeric"
+      className={className}
+      value={displayValue}
+      onChange={(event) => {
+        const nextValue = event.target.value.replace(/[^\d\-/.]/g, "");
+        setDisplayValue(nextValue);
+        const parsedValue = parseMonthDisplayValue(nextValue);
+        if (parsedValue) onChange(parsedValue);
+      }}
+      onBlur={() => commitValue(displayValue)}
+      placeholder={placeholder}
+    />
+  );
+}
+
 function authRedirectUrl() {
   const configuredUrl = import.meta.env.VITE_SUPABASE_REDIRECT_URL?.trim();
   const fallbackUrl = window.location.origin;
@@ -540,6 +632,7 @@ export default function App() {
     expenses: [],
   });
   const [expenses, setExpenses] = useState([]);
+  const [attendanceRecords, setAttendanceRecords] = useState([]);
   const [isDataLoading, setIsDataLoading] = useState(false);
   const [hasLoadedData, setHasLoadedData] = useState(false);
   const [dataError, setDataError] = useState("");
@@ -566,6 +659,7 @@ export default function App() {
   const [schemaSupport, setSchemaSupport] = useState({
     monthlyObligations: false,
     auditLog: false,
+    attendanceRecords: false,
   });
   const studentImportRef = useRef(null);
   const allDataImportRef = useRef(null);
@@ -600,6 +694,9 @@ export default function App() {
   const [studentSearch, setStudentSearch] = useState("");
   const [studentGroupFilter, setStudentGroupFilter] = useState("");
   const [studentStatusFilter, setStudentStatusFilter] = useState("active");
+  const [attendanceSearch, setAttendanceSearch] = useState("");
+  const [attendanceDateFilter, setAttendanceDateFilter] = useState(currentDateInput());
+  const [attendanceTeacherFilter, setAttendanceTeacherFilter] = useState("");
   const [teacherSearch, setTeacherSearch] = useState("");
   const [teacherMonthFilter, setTeacherMonthFilter] = useState(currentMonthInput());
   const [courseSearch, setCourseSearch] = useState("");
@@ -642,6 +739,9 @@ export default function App() {
   const [detailsTeacherId, setDetailsTeacherId] = useState(null);
   const [isTeacherDetailsEditing, setIsTeacherDetailsEditing] = useState(false);
   const [teacherDetailsCv, setTeacherDetailsCv] = useState("");
+  const [attendanceDetailsEnrollmentId, setAttendanceDetailsEnrollmentId] = useState(null);
+  const [attendanceCalendarMonth, setAttendanceCalendarMonth] = useState(currentMonthInput());
+  const [attendanceEditDate, setAttendanceEditDate] = useState(currentDateInput());
   const [isAssignStudentsModalOpen, setIsAssignStudentsModalOpen] = useState(false);
   const [assignTeacherId, setAssignTeacherId] = useState("");
   const [assignStudentIds, setAssignStudentIds] = useState([]);
@@ -668,6 +768,7 @@ export default function App() {
   });
   const [sortConfig, setSortConfig] = useState({
     students: { key: "firstName", direction: "asc" },
+    attendance: { key: "firstName", direction: "asc" },
     teachers: { key: "name", direction: "asc" },
     payments: { key: "date", direction: "desc" },
     paga: { key: "name", direction: "asc" },
@@ -692,7 +793,7 @@ export default function App() {
   const card = "bg-white border-gray-200";
   const input =
     "w-full min-w-0 max-w-full rounded-lg border bg-white border-gray-300 text-gray-900 px-3 py-2 text-sm sm:text-base outline-none focus:ring-2 focus:border-transparent";
-  const dateInput = `${input} h-11 appearance-none leading-normal`;
+  const dateInput = `${input} min-w-0 max-w-full h-11 appearance-none leading-normal`;
   const smallBtn = "app-button inline-flex items-center justify-center gap-2 px-3 py-2 sm:py-1.5 rounded-lg text-sm font-medium transition text-white";
   const mainBtn = "app-button inline-flex items-center justify-center gap-2 w-full sm:w-auto rounded-lg text-white font-medium px-4 py-2";
   const thClass = "px-3 sm:px-4 py-4 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 whitespace-nowrap";
@@ -729,6 +830,7 @@ export default function App() {
   const isTeacherUser = Boolean(currentTeacherAccount && !isAdminUser);
   const hasAppAccess = isAdminUser || Boolean(currentTeacherAccount);
   const canManageData = isAdminUser;
+  const canManageAttendance = isAdminUser || isTeacherUser;
   const canUseMonthlyObligations = schemaSupport.monthlyObligations;
   const canUseAuditLog = canManageData && schemaSupport.auditLog;
   const today = new Date();
@@ -1128,6 +1230,20 @@ export default function App() {
     archivedAt: row.archived_at,
   });
 
+  const normalizeAttendanceRecord = (row) => ({
+    id: row.id,
+    studentId: row.student_id,
+    enrollmentId: row.enrollment_id,
+    teacherId: row.teacher_id,
+    attendanceDate: row.attendance_date || "",
+    status: row.status || "",
+    note: row.note || "",
+    markedBy: row.marked_by || "",
+    markedAt: row.marked_at || "",
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  });
+
   const studentToRow = (student) => ({
     name: student.name,
     first_name: student.firstName,
@@ -1216,6 +1332,17 @@ export default function App() {
     date: expense.date,
     amount: Number(expense.amount || 0),
     note: expense.note || "",
+  });
+
+  const attendanceToRow = (attendance) => ({
+    student_id: attendance.studentId == null ? null : String(attendance.studentId),
+    enrollment_id: attendance.enrollmentId == null ? null : String(attendance.enrollmentId),
+    teacher_id: attendance.teacherId == null ? null : String(attendance.teacherId),
+    attendance_date: attendance.attendanceDate || "",
+    status: attendance.status || "",
+    note: attendance.note || "",
+    marked_by: attendance.markedBy || null,
+    marked_at: attendance.markedAt || new Date().toISOString(),
   });
 
   const splitArchived = (rows, normalize) => {
@@ -1415,7 +1542,16 @@ export default function App() {
     if (showLoading) setIsDataLoading(true);
     setDataError("");
 
-    const [studentsResult, teachersResult, coursesResult, enrollmentsResult, obligationsResult, paymentsResult, expensesResult] = await Promise.all([
+    const [
+      studentsResult,
+      teachersResult,
+      coursesResult,
+      enrollmentsResult,
+      obligationsResult,
+      paymentsResult,
+      expensesResult,
+      attendanceResult,
+    ] = await Promise.all([
       supabase.from("students").select("*"),
       supabase.from("teachers").select("*"),
       supabase.from("courses").select("*"),
@@ -1423,10 +1559,12 @@ export default function App() {
       supabase.from("monthly_obligations").select("*"),
       supabase.from("payments").select("*"),
       supabase.from("expenses").select("*"),
+      supabase.from("attendance_records").select("*"),
     ]);
 
     const enrollmentsTableMissing = isMissingTableError(enrollmentsResult.error, "enrollments");
     const obligationsTableMissing = isMissingTableError(obligationsResult.error, "monthly_obligations");
+    const attendanceTableMissing = isMissingTableError(attendanceResult.error, "attendance_records");
     const firstError = [
       studentsResult,
       teachersResult,
@@ -1435,6 +1573,7 @@ export default function App() {
       obligationsTableMissing ? { error: null } : obligationsResult,
       paymentsResult,
       expensesResult,
+      attendanceTableMissing ? { error: null } : attendanceResult,
     ].find((result) => result.error)?.error;
     if (firstError) {
       setDataError(firstError.message);
@@ -1454,6 +1593,7 @@ export default function App() {
       : (obligationsResult.data || []).map(normalizeMonthlyObligation).filter((row) => !row.archivedAt);
     const nextPayments = splitArchived(paymentsResult.data || [], normalizePayment);
     const nextExpenses = splitArchived(expensesResult.data || [], normalizeExpense);
+    const nextAttendanceRecords = attendanceTableMissing ? [] : (attendanceResult.data || []).map(normalizeAttendanceRecord);
     let syncedMonthlyObligations = nextMonthlyObligations;
     if (!obligationsTableMissing && canManageData) {
       try {
@@ -1476,6 +1616,7 @@ export default function App() {
     setMonthlyObligations(syncedMonthlyObligations);
     setPayments(nextPayments.active);
     setExpenses(nextExpenses.active);
+    setAttendanceRecords(nextAttendanceRecords);
     setArchive({
       students: nextStudents.archived,
       teachers: nextTeachers.archived,
@@ -1486,6 +1627,7 @@ export default function App() {
     setSchemaSupport((prev) => ({
       ...prev,
       monthlyObligations: !obligationsTableMissing,
+      attendanceRecords: !attendanceTableMissing,
     }));
     setHasLoadedData(true);
     if (showLoading) setIsDataLoading(false);
@@ -1870,6 +2012,14 @@ export default function App() {
         }
         setMonthlyObligations((prev) => upsertById(prev, normalizedObligation));
       }
+      if (table === "attendance_records") {
+        if (isDelete) {
+          setAttendanceRecords((prev) => removeById(prev, id));
+          return;
+        }
+        const normalizedAttendance = normalizeAttendanceRecord(payload.new);
+        setAttendanceRecords((prev) => upsertById(prev, normalizedAttendance));
+      }
       if (table === "payments") syncActiveAndArchive(setPayments, "payments", normalizePayment);
       if (table === "expenses") syncActiveAndArchive(setExpenses, "expenses", normalizeExpense);
       if (table === "audit_log") {
@@ -1893,6 +2043,7 @@ export default function App() {
       "enrollments",
       "payments",
       "expenses",
+      ...(schemaSupport.attendanceRecords ? ["attendance_records"] : []),
       ...(schemaSupport.monthlyObligations ? ["monthly_obligations"] : []),
       ...(isAdminUser && schemaSupport.auditLog ? ["audit_log"] : []),
     ];
@@ -1920,7 +2071,7 @@ export default function App() {
       supabase.removeChannel(channel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdminUser, schemaSupport.auditLog, schemaSupport.monthlyObligations, session]);
+  }, [isAdminUser, schemaSupport.attendanceRecords, schemaSupport.auditLog, schemaSupport.monthlyObligations, session]);
 
   const signInWithGoogle = async () => {
     setAuthError("");
@@ -2838,6 +2989,56 @@ export default function App() {
     cancelEditTeacher();
   };
 
+  const openAttendanceDetailsModal = (row) => {
+    const selectedDate = isoDateInputValue(row?.date || attendanceDateFilter) || currentDateInput();
+    setAttendanceDetailsEnrollmentId(row?.enrollmentId || null);
+    setAttendanceCalendarMonth(monthFromDate(selectedDate) || currentMonthInput());
+    setAttendanceEditDate(selectedDate);
+  };
+
+  const closeAttendanceDetailsModal = () => {
+    setAttendanceDetailsEnrollmentId(null);
+    setAttendanceCalendarMonth(monthFromDate(isoDateInputValue(attendanceDateFilter)) || currentMonthInput());
+    setAttendanceEditDate(isoDateInputValue(attendanceDateFilter) || currentDateInput());
+  };
+
+  const saveAttendanceStatus = async ({ enrollment, student, attendanceDate, status, note = "" }) => {
+    if (!supabase || !schemaSupport.attendanceRecords || !enrollment?.id || !attendanceDate || !status) return null;
+
+    const existingRecord = attendanceRecords.find(
+      (record) => sameId(record.enrollmentId, enrollment.id) && record.attendanceDate === attendanceDate
+    );
+    const nextAttendance = {
+      id: existingRecord?.id,
+      studentId: student?.id || enrollment.studentId,
+      enrollmentId: enrollment.id,
+      teacherId: enrollment.teacherId || null,
+      attendanceDate,
+      status,
+      note,
+      markedBy: currentUser?.id || existingRecord?.markedBy || "",
+      markedAt: new Date().toISOString(),
+    };
+
+    const { data, error } = await supabase
+      .from("attendance_records")
+      .upsert([attendanceToRow(nextAttendance)], { onConflict: "enrollment_id,attendance_date" })
+      .select("*")
+      .single();
+
+    if (error) throw error;
+
+    const savedRecord = normalizeAttendanceRecord(data);
+    setAttendanceRecords((prev) => upsertById(prev, savedRecord));
+    return savedRecord;
+  };
+
+  const clearAttendanceStatus = async (recordId) => {
+    if (!recordId) return;
+    await deleteRow("attendance_records", recordId);
+    setAttendanceRecords((prev) => removeById(prev, recordId));
+  };
+
   const startTeacherDetailsEdit = (teacher) => {
     startEditTeacher(teacher);
     setTeacherDetailsCv(teacher.cv || "");
@@ -3078,6 +3279,13 @@ export default function App() {
 
   const currentPaymentMonth = monthFromDate(new Date().toISOString());
   const activeStudentPaymentMonth = studentGroupFilter || currentPaymentMonth;
+  const currentAttendanceDate = currentDateInput();
+  const activeAttendanceDate = isoDateInputValue(attendanceDateFilter) || currentAttendanceDate;
+  const activeAttendanceMonth = monthFromDate(activeAttendanceDate);
+  const activeAttendanceTeacherFilter =
+    attendanceTeacherFilter && teachers.some((teacher) => sameId(teacher.id, attendanceTeacherFilter))
+      ? attendanceTeacherFilter
+      : "";
 
   const getStudentCourse = (student) => courses.find((course) => sameId(course.id, student.courseId) || course.name === student.course);
   const studentExpectedEnrollmentsForMonth = (student, monthKey = activeStudentPaymentMonth) =>
@@ -3130,6 +3338,13 @@ export default function App() {
   const paymentTeacher = useCallback(
     (payment) => teachers.find((teacher) => sameId(teacher.id, paymentTeacherId(payment))),
     [paymentTeacherId, teachers]
+  );
+  const attendanceRecordForEnrollmentDate = useCallback(
+    (enrollmentId, attendanceDate) =>
+      attendanceRecords.find(
+        (record) => sameId(record.enrollmentId, enrollmentId) && record.attendanceDate === attendanceDate
+      ) || null,
+    [attendanceRecords]
   );
   const adjustedTeacherPaymentRows = useCallback(
     (teacher, teacherPayments) => {
@@ -3217,6 +3432,164 @@ export default function App() {
     return matchesGroup && matchesStatus;
   });
 
+  const attendanceRows = useMemo(() => {
+    return enrollments
+      .filter((enrollment) => {
+        if (enrollment.archivedAt) return false;
+        if ((enrollment.status || "active") !== "active") return false;
+        if (!enrollmentAppliesToMonth(enrollment, activeAttendanceMonth)) return false;
+        if (isTeacherUser && !sameId(enrollment.teacherId, currentTeacherId)) return false;
+        if (!isTeacherUser && activeAttendanceTeacherFilter && !sameId(enrollment.teacherId, activeAttendanceTeacherFilter)) return false;
+
+        const student = studentsWithEnrollment.find((item) => sameId(item.id, enrollment.studentId));
+        const teacher = teachers.find((item) => sameId(item.id, enrollment.teacherId));
+        const q = attendanceSearch.trim().toLowerCase();
+        if (!q) return Boolean(student);
+
+        return [
+          student?.name,
+          student?.firstName,
+          student?.lastName,
+          enrollment.course,
+          enrollment.studentGroup,
+          teacher?.name,
+          formatDateDisplay(activeAttendanceDate),
+        ].some((value) => String(value || "").toLowerCase().includes(q));
+      })
+      .map((enrollment) => {
+        const student = studentsWithEnrollment.find((item) => sameId(item.id, enrollment.studentId));
+        const teacher = teachers.find((item) => sameId(item.id, enrollment.teacherId));
+        const record = attendanceRecordForEnrollmentDate(enrollment.id, activeAttendanceDate);
+        return {
+          id: `${enrollment.id}-${activeAttendanceDate}`,
+          enrollmentId: enrollment.id,
+          studentId: enrollment.studentId,
+          firstName: student?.firstName || student?.name || "Pa student",
+          lastName: student?.lastName || "",
+          course: enrollment.course || student?.course || "-",
+          teacherId: enrollment.teacherId || null,
+          teacherName: teacher?.name || enrollment.teacherName || "Pa mesues",
+          studentGroup: enrollment.studentGroup || student?.studentGroup || "-",
+          date: activeAttendanceDate,
+          status: record?.status || "",
+          recordId: record?.id || "",
+          record,
+          enrollment,
+          student,
+        };
+      })
+      .filter((row) => row.student);
+  }, [
+    activeAttendanceDate,
+    activeAttendanceMonth,
+    activeAttendanceTeacherFilter,
+    attendanceRecordForEnrollmentDate,
+    attendanceSearch,
+    currentTeacherId,
+    enrollments,
+    isTeacherUser,
+    studentsWithEnrollment,
+    teachers,
+  ]);
+
+  const sortedAttendanceRows = sortRows(attendanceRows, "attendance", {
+    firstName: (row) => row.firstName,
+    lastName: (row) => row.lastName,
+    course: (row) => row.course,
+    teacherName: (row) => row.teacherName,
+    studentGroup: (row) => row.studentGroup,
+    date: (row) => row.date,
+    status: (row) => row.status,
+  });
+
+  const selectedAttendanceDetailsRow = useMemo(() => {
+    if (!attendanceDetailsEnrollmentId) return null;
+    const enrollment = enrollments.find((item) => sameId(item.id, attendanceDetailsEnrollmentId));
+    if (!enrollment) return null;
+    const student = studentsWithEnrollment.find((item) => sameId(item.id, enrollment.studentId));
+    const teacher = teachers.find((item) => sameId(item.id, enrollment.teacherId));
+    return {
+      enrollment,
+      student,
+      teacher,
+      record: attendanceRecordForEnrollmentDate(enrollment.id, activeAttendanceDate),
+    };
+  }, [activeAttendanceDate, attendanceDetailsEnrollmentId, attendanceRecordForEnrollmentDate, enrollments, studentsWithEnrollment, teachers]);
+
+  const selectedAttendanceRecords = useMemo(
+    () =>
+      attendanceRecords.filter((record) => sameId(record.enrollmentId, attendanceDetailsEnrollmentId)),
+    [attendanceDetailsEnrollmentId, attendanceRecords]
+  );
+  const selectedAttendanceCalendarRecords = useMemo(() => {
+    const monthRecords = selectedAttendanceRecords.filter(
+      (record) => monthFromDate(record.attendanceDate) === attendanceCalendarMonth
+    );
+    return new Map(monthRecords.map((record) => [record.attendanceDate, record]));
+  }, [attendanceCalendarMonth, selectedAttendanceRecords]);
+  const selectedAttendanceCalendarDays = useMemo(
+    () => monthCalendarDays(attendanceCalendarMonth),
+    [attendanceCalendarMonth]
+  );
+  const selectedAttendanceEditIsoDate = isoDateInputValue(attendanceEditDate) || activeAttendanceDate;
+  const selectedAttendanceEditRecord =
+    selectedAttendanceRecords.find((record) => record.attendanceDate === selectedAttendanceEditIsoDate) || null;
+  const selectedAttendanceMonthSummary = useMemo(
+    () =>
+      selectedAttendanceRecords
+        .filter((record) => monthFromDate(record.attendanceDate) === attendanceCalendarMonth)
+        .reduce(
+          (summary, record) => ({
+            present: summary.present + (record.status === "present" ? 1 : 0),
+            absent: summary.absent + (record.status === "absent" ? 1 : 0),
+          }),
+          { present: 0, absent: 0 }
+        ),
+    [attendanceCalendarMonth, selectedAttendanceRecords]
+  );
+  const canEditSelectedAttendance =
+    canManageAttendance &&
+    (!selectedAttendanceDetailsRow?.teacher?.id || canManageData || sameId(selectedAttendanceDetailsRow.teacher.id, currentTeacherId));
+
+  const markAttendanceFromList = async (row, status) => {
+    if (!canManageAttendance || !schemaSupport.attendanceRecords || !row?.enrollment || !row?.student) return;
+    if (row.status === status) return;
+    try {
+      await saveAttendanceStatus({
+        enrollment: row.enrollment,
+        student: row.student,
+        attendanceDate: activeAttendanceDate,
+        status,
+      });
+    } catch (error) {
+      reportDataError(error);
+    }
+  };
+
+  const saveAttendanceDetailsStatus = async (status) => {
+    if (!canEditSelectedAttendance || !selectedAttendanceDetailsRow?.enrollment || !selectedAttendanceDetailsRow?.student) return;
+    try {
+      await saveAttendanceStatus({
+        enrollment: selectedAttendanceDetailsRow.enrollment,
+        student: selectedAttendanceDetailsRow.student,
+        attendanceDate: selectedAttendanceEditIsoDate,
+        status,
+        note: selectedAttendanceEditRecord?.note || "",
+      });
+    } catch (error) {
+      reportDataError(error);
+    }
+  };
+
+  const clearAttendanceDetailsStatus = async () => {
+    if (!canEditSelectedAttendance || !selectedAttendanceEditRecord?.id) return;
+    try {
+      await clearAttendanceStatus(selectedAttendanceEditRecord.id);
+    } catch (error) {
+      reportDataError(error);
+    }
+  };
+
   const selectedTeacherStudents = studentsWithEnrollment.filter((student) => {
     const matchesTeacher = studentEnrollmentRows(student.id).some((enrollment) => sameId(enrollment.teacherId, selectedTeacherView));
     const matchesMonth = teacherMonthFilter
@@ -3288,7 +3661,18 @@ export default function App() {
     return teachers
       .filter((teacher) => (isTeacherUser ? sameId(teacher.id, currentTeacherId) : !activeFinanceTeacherFilter || teacher.name === activeFinanceTeacherFilter))
       .map((teacher) => {
-        const teacherStudents = studentsWithEnrollment.filter((student) => sameId(student.teacherId, teacher.id));
+        const activeStudentIds = new Set(
+          enrollments
+            .filter(
+              (enrollment) =>
+                sameId(enrollment.teacherId, teacher.id) &&
+                !enrollment.archivedAt &&
+                enrollment.status === "active" &&
+                (!financeMonth || enrollmentAppliesToMonth(enrollment, financeMonth))
+            )
+            .map((enrollment) => String(enrollment.studentId))
+        );
+        const teacherStudents = studentsWithEnrollment.filter((student) => activeStudentIds.has(String(student.id)));
         const relevantPayments = paymentsForCurrentUser.filter((payment) => {
           const sameTeacher = sameId(paymentTeacherId(payment), teacher.id);
           const sameMonth = financeMonth ? paymentMonthKey(payment) === financeMonth : true;
@@ -3310,7 +3694,7 @@ export default function App() {
           notes,
         };
       });
-  }, [teachers, studentsWithEnrollment, paymentsForCurrentUser, financeMonth, activeFinanceTeacherFilter, isTeacherUser, currentTeacherId, paymentTeacherId, summarizeTeacherPayments]);
+  }, [teachers, studentsWithEnrollment, enrollments, paymentsForCurrentUser, financeMonth, activeFinanceTeacherFilter, isTeacherUser, currentTeacherId, paymentTeacherId, summarizeTeacherPayments]);
 
   const allTimeIncomeOverview = useMemo(() => {
     const totalIncome = payments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
@@ -4419,8 +4803,9 @@ export default function App() {
 
   const navItems = useMemo(() => [
     { key: "students", label: "Nxënësit" },
-    { key: "teachers", label: "Stafi" },
+    { key: "attendance", label: "Vijueshmëria" },
     { key: "payments", label: "Pagesat" },
+    { key: "teachers", label: "Stafi" },
     { key: "paga", label: "Paga" },
     { key: "finance", label: "Financa" },
     { key: "courses", label: "Kurset" },
@@ -4622,7 +5007,7 @@ export default function App() {
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
               <div>
                 <h2 className="text-2xl font-bold" style={{ color: PRIMARY }}>Nxënësit</h2>
-                <p className="text-gray-500">Menaxho nxënësit dhe mësuesin përkatës.</p>
+                <p className="text-gray-500">Menaxho nxënësit.</p>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 w-full lg:w-[58rem]">
                 {searchField({
@@ -4700,7 +5085,7 @@ export default function App() {
                             ]}
                           />
                         ) : (student.course || "-")}</td>
-                        <td className={tdClass}>{isEditing ? <input className={dateInput} type="month" value={editingStudentGroup} onChange={(e) => setEditingStudentGroup(e.target.value)} /> : formatMonthYear(student.group)}</td>
+                        <td className={tdClass}>{isEditing ? <MonthTextInput className={dateInput} value={editingStudentGroup} onChange={setEditingStudentGroup} /> : formatMonthYear(student.group)}</td>
                         <td className={tdClass}>{isEditing ? <input className={input} value={editingStudentStudentGroup} onChange={(e) => setEditingStudentStudentGroup(e.target.value)} placeholder="gr1" /> : (student.studentGroup || "-")}</td>
                         <td className={tdClass}>{enrollmentStatusLabel(student.enrollmentStatus)}</td>
                         <td className={tdClass}>
@@ -4756,16 +5141,155 @@ export default function App() {
                               </>
                             ) : canManageData ? (
                               <>
-                                <button onClick={(e) => { e.stopPropagation(); openStudentDetailsModal(student); }} className={smallBtn} style={primaryBtnStyle}>{actionLabel("information", "Shfaq të dhënat")}</button>
+                                <button onClick={(e) => { e.stopPropagation(); openStudentDetailsModal(student); }} className={smallBtn} style={primaryBtnStyle}>{actionLabel("information", "Detajet")}</button>
                               </>
                             ) : (
-                              <button onClick={(e) => { e.stopPropagation(); openStudentDetailsModal(student); }} className={smallBtn} style={primaryBtnStyle}>{actionLabel("information", "Shfaq të dhënat")}</button>
+                              <button onClick={(e) => { e.stopPropagation(); openStudentDetailsModal(student); }} className={smallBtn} style={primaryBtnStyle}>{actionLabel("information", "Detajet")}</button>
                             )}
                           </div>
                         </td>
                       </tr>
                     );
                   })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {activeView === "attendance" && (
+          <div className={`border rounded-lg lg:rounded-2xl shadow-sm ${card} p-3 sm:p-4`}>
+            <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
+              <div>
+                <h2 className="text-2xl font-bold" style={{ color: PRIMARY }}>Vijueshmëria</h2>
+                <p className="text-gray-500">Shëno prezencen ditore për datën e zgjedhur.</p>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 w-full lg:w-[58rem]">
+                {searchField({
+                  value: attendanceSearch,
+                  onChange: (e) => setAttendanceSearch(e.target.value),
+                  placeholder: "Kerko sipas nxenesit, kursit ose grupit",
+                })}
+                <DateTextInput className={dateInput} value={attendanceDateFilter} onChange={setAttendanceDateFilter} />
+                <SearchableSelect
+                  className={input}
+                  value={isTeacherUser ? currentTeacherId || "" : activeAttendanceTeacherFilter}
+                  onChange={isTeacherUser ? () => {} : setAttendanceTeacherFilter}
+                  placeholder="Te gjithe mesuesit"
+                  disabled={isTeacherUser}
+                  options={isTeacherUser
+                    ? [{ value: currentTeacherId || "", label: currentTeacherAccount?.name || "Mesuesi" }]
+                    : [
+                        { value: "", label: "Te gjithe mesuesit" },
+                        ...sortedTeachersAlpha.map((teacher) => ({ value: teacher.id, label: teacher.name })),
+                      ]}
+                />
+                <button
+                  onClick={() => {
+                    setAttendanceSearch("");
+                    setAttendanceTeacherFilter("");
+                    setAttendanceDateFilter(currentDateInput());
+                    closeAttendanceDetailsModal();
+                  }}
+                  className={mainBtn}
+                  style={secondaryBtnStyle}
+                >
+                  {actionLabel("clear", "Pastro filtrin")}
+                </button>
+              </div>
+            </div>
+
+            {!schemaSupport.attendanceRecords && (
+              <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                Tabela <span className="font-semibold">attendance_records</span> mungon ne Supabase. Krijoje tabelen dhe politikat, pastaj ky tab behet funksional.
+              </div>
+            )}
+
+            <div className={tableWrap}>
+              <table className="min-w-[78rem] w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-200">
+                    <th className={thClass}>Nr</th>
+                    <th className={thClass}>{sortButton("attendance", "firstName", "Emri")}</th>
+                    <th className={thClass}>{sortButton("attendance", "lastName", "Mbiemri")}</th>
+                    <th className={thClass}>{sortButton("attendance", "course", "Kursi")}</th>
+                    <th className={thClass}>{sortButton("attendance", "teacherName", "Mesuesi")}</th>
+                    <th className={thClass}>{sortButton("attendance", "studentGroup", "Grupi")}</th>
+                    <th className={thClass}>{sortButton("attendance", "date", "Data")}</th>
+                    <th className={thClass}>Prezenca</th>
+                    <th className={thClass}>Detajet</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedAttendanceRows.length ? (
+                    sortedAttendanceRows.map((row, index) => (
+                      <tr key={row.id} className={rowHover}>
+                        <td className={tdClass}>{index + 1}</td>
+                        <td className={tdClass}>{row.firstName}</td>
+                        <td className={tdClass}>{row.lastName || "-"}</td>
+                        <td className={tdClass}>{row.course || "-"}</td>
+                        <td className={tdClass}>{row.teacherName || "-"}</td>
+                        <td className={tdClass}>{row.studentGroup || "-"}</td>
+                        <td className={tdClass}>{formatDateDisplay(row.date)}</td>
+                        <td className={tdClass}>
+                          {row.status === "present" ? (
+                            <div className="flex justify-center">
+                              <img src={doneIcon} alt="Prezent" className="h-5 w-5" />
+                            </div>
+                          ) : row.status === "absent" ? (
+                            <div className="flex justify-center">
+                              <span className="inline-flex h-5 w-5 items-center justify-center text-base font-bold leading-none text-[#dc2626]">
+                                X
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-center gap-5">
+                              <button
+                                type="button"
+                                className="inline-flex h-5 w-5 items-center justify-center opacity-80 transition hover:opacity-100"
+                                disabled={!canManageAttendance || !schemaSupport.attendanceRecords}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void markAttendanceFromList(row, "present");
+                                }}
+                                title="Prezent"
+                              >
+                                <img src={doneIcon} alt="Prezent" className="h-4 w-4" />
+                              </button>
+                              <button
+                                type="button"
+                                className="inline-flex h-5 w-5 items-center justify-center text-base font-bold leading-none text-[#dc2626] opacity-80 transition hover:opacity-100"
+                                disabled={!canManageAttendance || !schemaSupport.attendanceRecords}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void markAttendanceFromList(row, "absent");
+                                }}
+                                title="Mungon"
+                              >
+                                X
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                        <td className={tdClass}>
+                          <button
+                            type="button"
+                            onClick={() => openAttendanceDetailsModal(row)}
+                            className={smallBtn}
+                            style={primaryBtnStyle}
+                          >
+                            {actionLabel("information", "Detajet")}
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td className={tdClass} colSpan={9}>
+                        Nuk ka nxenes per daten dhe filtrat e zgjedhur.
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -4845,7 +5369,7 @@ export default function App() {
                         <td className={tdClass}>{countStudents}</td>
                         <td className={tdClass}>
                           <button onClick={(e) => { e.stopPropagation(); openTeacherDetailsModal(teacher); }} className={smallBtn} style={primaryBtnStyle}>
-                            {actionLabel("information", "Shfaq detajet")}
+                            {actionLabel("information", "Detajet")}
                           </button>
                         </td>
                       </tr>
@@ -5597,7 +6121,7 @@ export default function App() {
                     />
                   </div>
                 ) : <span className="font-medium">{selectedDetailsStudent.course || "-"}</span>}</div>
-                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Muaji</span>{isStudentDetailsEditing ? <input className={`${dateInput} mt-2`} type="month" value={editingStudentGroup} onChange={(e) => setEditingStudentGroup(e.target.value)} /> : <span className="font-medium">{formatMonthYear(selectedDetailsStudent.group)}</span>}</div>
+                <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Muaji</span>{isStudentDetailsEditing ? <MonthTextInput className={`${dateInput} mt-2`} value={editingStudentGroup} onChange={setEditingStudentGroup} /> : <span className="font-medium">{formatMonthYear(selectedDetailsStudent.group)}</span>}</div>
                 <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Grupi</span>{isStudentDetailsEditing ? <input className={`${input} mt-2`} value={editingStudentStudentGroup} onChange={(e) => setEditingStudentStudentGroup(e.target.value)} /> : <span className="font-medium">{selectedDetailsStudent.studentGroup || "-"}</span>}</div>
                 <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Mësuesi</span>{isStudentDetailsEditing ? (
                   <div className="mt-2">
@@ -5679,6 +6203,166 @@ export default function App() {
                     <button type="button" onClick={() => requestArchiveConfirmation("teacher", selectedDetailsTeacher)} className={smallBtn} style={warningBtnStyle}>{actionLabel("archive", "Archive")}</button>
                   </>
                 ) : null}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {selectedAttendanceDetailsRow?.student && (
+          <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center overflow-y-auto bg-black/40 p-3 sm:p-4" onClick={closeAttendanceDetailsModal}>
+            <div className="my-4 flex w-full max-w-4xl max-h-[82vh] flex-col gap-4 overflow-hidden rounded-lg bg-white p-4 sm:p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>Detajet e vijueshmerise</h3>
+                  <p className="text-sm text-gray-500">
+                    {[selectedAttendanceDetailsRow.student.name, selectedAttendanceDetailsRow.enrollment.course, selectedAttendanceDetailsRow.enrollment.studentGroup]
+                      .filter(Boolean)
+                      .join(" - ")}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={closeAttendanceDetailsModal} className={smallBtn} style={secondaryBtnStyle}>
+                    Close
+                  </button>
+                </div>
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-auto pr-1 space-y-4">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-6">
+                  <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Emri</span><span className="font-medium">{selectedAttendanceDetailsRow.student.firstName || "-"}</span></div>
+                  <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Mbiemri</span><span className="font-medium">{selectedAttendanceDetailsRow.student.lastName || "-"}</span></div>
+                  <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Kursi</span><span className="font-medium">{selectedAttendanceDetailsRow.enrollment.course || "-"}</span></div>
+                  <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Mesuesi</span><span className="font-medium">{selectedAttendanceDetailsRow.teacher?.name || "Pa mesues"}</span></div>
+                  <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Grupi</span><span className="font-medium">{selectedAttendanceDetailsRow.enrollment.studentGroup || "-"}</span></div>
+                  <div className="rounded-lg border border-gray-200 px-3 py-2"><span className="block text-xs text-gray-500">Data aktive</span><span className="font-medium">{formatDateDisplay(activeAttendanceDate)}</span></div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
+                  <div className="rounded-lg border border-gray-200 p-4">
+                    <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="text-lg font-semibold" style={{ color: PRIMARY }}>{formatMonthYear(attendanceCalendarMonth)}</div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setAttendanceCalendarMonth(addMonthsToMonthKey(attendanceCalendarMonth, -1))}
+                          className={smallBtn}
+                          style={secondaryBtnStyle}
+                        >
+                          Muaji para
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAttendanceCalendarMonth(addMonthsToMonthKey(attendanceCalendarMonth, 1))}
+                          className={smallBtn}
+                          style={secondaryBtnStyle}
+                        >
+                          Muaji tjeter
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="mb-3 grid grid-cols-7 gap-2 text-center text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      {["Hen", "Mar", "Mer", "Enj", "Pre", "Sht", "Die"].map((label) => (
+                        <div key={label}>{label}</div>
+                      ))}
+                    </div>
+
+                    <div className="grid grid-cols-7 gap-2">
+                      {selectedAttendanceCalendarDays.map((day) => {
+                        const dayRecord = selectedAttendanceCalendarRecords.get(day.isoDate);
+                        const isSelectedDay = day.isoDate === selectedAttendanceEditIsoDate;
+                        const statusClass =
+                          dayRecord?.status === "present"
+                            ? "border-green-200 bg-green-100 text-green-900"
+                            : dayRecord?.status === "absent"
+                              ? "border-red-200 bg-red-100 text-red-900"
+                              : "border-gray-200 bg-white text-gray-800";
+
+                        return (
+                          <button
+                            key={day.isoDate}
+                            type="button"
+                            onClick={() => {
+                              setAttendanceEditDate(day.isoDate);
+                              setAttendanceCalendarMonth(monthFromDate(day.isoDate) || attendanceCalendarMonth);
+                            }}
+                            className={`flex min-h-[5.5rem] flex-col items-start justify-between rounded-lg border px-2 py-2 text-left transition ${
+                              day.inCurrentMonth ? statusClass : "border-gray-100 bg-gray-50 text-gray-400"
+                            } ${isSelectedDay ? "ring-2 ring-[#2e2c80]" : ""}`}
+                          >
+                            <span className="text-sm font-semibold">{day.label}</span>
+                            <span className="text-xs font-medium">
+                              {dayRecord?.status === "present" ? "Prezent" : dayRecord?.status === "absent" ? "Mungon" : ""}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-gray-200 p-4 space-y-4">
+                    <div>
+                      <div className="text-sm font-semibold text-gray-700">Permbledhje mujore</div>
+                      <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
+                        <div className="rounded-lg bg-green-50 px-3 py-2 text-green-800">
+                          <div className="text-xs uppercase tracking-wide">Prezent</div>
+                          <div className="text-lg font-semibold">{selectedAttendanceMonthSummary.present}</div>
+                        </div>
+                        <div className="rounded-lg bg-red-50 px-3 py-2 text-red-800">
+                          <div className="text-xs uppercase tracking-wide">Mungon</div>
+                          <div className="text-lg font-semibold">{selectedAttendanceMonthSummary.absent}</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-lg border border-gray-200 p-3">
+                      <div className="text-xs text-gray-500">Data e zgjedhur</div>
+                      <div className="mt-2">
+                        <DateTextInput className={dateInput} value={attendanceEditDate} onChange={setAttendanceEditDate} />
+                      </div>
+                      <div className="mt-3 text-sm text-gray-700">
+                        Statusi aktual:{" "}
+                        <span className="font-semibold">
+                          {selectedAttendanceEditRecord?.status === "present"
+                            ? "Prezent"
+                            : selectedAttendanceEditRecord?.status === "absent"
+                              ? "Mungon"
+                              : "Pa shenim"}
+                        </span>
+                      </div>
+                    </div>
+
+                    {canEditSelectedAttendance && schemaSupport.attendanceRecords && (
+                      <div className="space-y-2">
+                        <button
+                          type="button"
+                          onClick={() => void saveAttendanceDetailsStatus("present")}
+                          className={`${mainBtn} sm:w-full`}
+                          style={primaryBtnStyle}
+                        >
+                          Prezent
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void saveAttendanceDetailsStatus("absent")}
+                          className={`${mainBtn} sm:w-full`}
+                          style={warningBtnStyle}
+                        >
+                          Mungon
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void clearAttendanceDetailsStatus()}
+                          className={`${mainBtn} sm:w-full`}
+                          style={dangerBtnStyle}
+                          disabled={!selectedAttendanceEditRecord}
+                        >
+                          Fshije
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -5804,7 +6488,7 @@ export default function App() {
                       ...sortedTeachersAlpha.map((teacher) => ({ value: teacher.id, label: teacher.name })),
                     ]}
                   />
-                  <input className={dateInput} type="month" value={enrollmentForm.group} onChange={(e) => setEnrollmentForm((prev) => ({ ...prev, group: e.target.value }))} aria-label="Muaji" title="Muaji" />
+                  <MonthTextInput className={dateInput} value={enrollmentForm.group} onChange={(nextValue) => setEnrollmentForm((prev) => ({ ...prev, group: nextValue }))} aria-label="Muaji" title="Muaji" />
                   <input className={input} value={enrollmentForm.studentGroup} onChange={(e) => setEnrollmentForm((prev) => ({ ...prev, studentGroup: e.target.value }))} placeholder="Grupi (p.sh. gr1)" />
                   <SearchableSelect
                     className={input}
@@ -5813,7 +6497,7 @@ export default function App() {
                     placeholder="Statusi"
                     options={enrollmentStatusOptions}
                   />
-                  <input className={dateInput} type="month" value={enrollmentForm.endMonth} onChange={(e) => setEnrollmentForm((prev) => ({ ...prev, endMonth: e.target.value }))} aria-label="Deri" title="Deri" disabled={enrollmentForm.status === "active"} />
+                  <MonthTextInput className={dateInput} value={enrollmentForm.endMonth} onChange={(nextValue) => setEnrollmentForm((prev) => ({ ...prev, endMonth: nextValue }))} aria-label="Deri" title="Deri" disabled={enrollmentForm.status === "active"} />
                   <input className={`${input} md:col-span-2`} value={enrollmentForm.note} onChange={(e) => setEnrollmentForm((prev) => ({ ...prev, note: e.target.value }))} placeholder="Shënime" />
                 </div>
                 <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:justify-end">
@@ -6053,7 +6737,7 @@ export default function App() {
                     ]}
                   />
                 </div>
-                <input className={dateInput} type="month" value={studentForm.group} onChange={(e) => setStudentForm((prev) => ({ ...prev, group: e.target.value }))} aria-label="Muaji" title="Muaji" />
+                <MonthTextInput className={dateInput} value={studentForm.group} onChange={(nextValue) => setStudentForm((prev) => ({ ...prev, group: nextValue }))} aria-label="Muaji" title="Muaji" />
                 <input className={input} value={studentForm.studentGroup} onChange={(e) => setStudentForm((prev) => ({ ...prev, studentGroup: e.target.value }))} placeholder="Grupi (p.sh. gr1)" />
                 <div className="md:col-span-2">
                   <SearchableSelect
@@ -6344,7 +7028,7 @@ export default function App() {
 
         {isAuditLogModalOpen && (
           <div className="fixed inset-0 z-[60] flex items-start sm:items-center justify-center overflow-y-auto bg-black/40 p-3 sm:p-4" onClick={() => setIsAuditLogModalOpen(false)}>
-            <div className="my-4 w-full max-w-6xl rounded-lg bg-white p-4 sm:p-6 shadow-xl space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="my-4 flex w-full max-w-5xl max-h-[82vh] flex-col gap-4 overflow-hidden rounded-lg bg-white p-4 sm:p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <h3 className="text-xl font-bold" style={{ color: PRIMARY }}>Historiku i ndryshimeve</h3>
@@ -6368,8 +7052,8 @@ export default function App() {
               )}
 
               {!isAuditLogLoading && !auditLogError && (
-                <div className={tableWrap}>
-                  <table className="min-w-[72rem] w-full text-sm">
+                <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-gray-200">
+                  <table className="min-w-[64rem] w-full text-sm">
                     <thead>
                       <tr className="border-b border-gray-200">
                         <th className={thClass}>Data</th>
@@ -6389,7 +7073,7 @@ export default function App() {
                             <td className={tdClass}>{entry.tableName || "-"}</td>
                             <td className={tdClass}>{auditActionLabel(entry)}</td>
                             <td className={tdClass}>{auditRecordLabel(entry)}</td>
-                            <td className={`${tdClass} whitespace-normal min-w-[22rem]`}>{auditChangeSummary(entry)}</td>
+                            <td className={`${tdClass} whitespace-normal min-w-[18rem]`}>{auditChangeSummary(entry)}</td>
                           </tr>
                         ))
                       ) : (
